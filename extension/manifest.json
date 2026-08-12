@@ -2,13 +2,10 @@
   "manifest_version": 3,
   "name": "兔仔 · X 帖子浮层阅读器",
   "short_name": "兔仔浮层",
-  "version": "0.4.0",
-  "description": "在 X 时间线直接用双栏浮层阅读和操作原帖与评论，关闭后继续留在原位置。",
-  "permissions": ["storage", "tabs"],
+  "version": "0.5.0",
+  "description": "在 X 时间线用一个双栏浮层加载原生原帖与评论，关闭后继续留在原位置。",
+  "permissions": ["storage"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
-  "background": {
-    "service_worker": "background.js"
-  },
   "action": {
     "default_title": "兔仔帖子浮层",
     "default_popup": "popup/popup.html",
@@ -30,7 +27,8 @@
       "matches": ["https://x.com/*", "https://twitter.com/*"],
       "css": ["vendor/phosphor/style.css", "content.css"],
       "js": ["core.js", "content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [

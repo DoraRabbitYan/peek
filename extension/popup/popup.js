@@ -12,6 +12,4 @@ toggle.addEventListener("change", async () => {
   const enabled = toggle.checked;
   await chrome.storage.sync.set({ enabled });
   render(enabled);
-  const tabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] });
-  await Promise.allSettled(tabs.map((tab) => chrome.tabs.sendMessage(tab.id, { type: "TUZAI_SET_ENABLED", enabled })));
 });

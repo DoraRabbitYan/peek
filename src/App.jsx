@@ -131,7 +131,6 @@ function TimelineBackground({ onOpen }) {
 
 export function App() {
   const [open, setOpen] = useState(true);
-  const [state, setState] = useState("ready");
   const [metrics, setMetrics] = useState({ liked: false, reposted: false, bookmarked: false });
   const [replyItems, setReplyItems] = useState(initialReplies);
   const [replyTarget, setReplyTarget] = useState("原帖");
@@ -225,28 +224,19 @@ export function App() {
                 <div><strong>帖子浮层</strong><span>主页位置已保留</span></div>
               </div>
               <div className="tuzai-toolbar-actions">
-                <label className="demo-state-picker">
-                  <span>评论状态</span>
-                  <select value={state} onChange={(event) => setState(event.target.value)}>
-                    <option value="ready">已加载</option>
-                    <option value="loading">加载中</option>
-                    <option value="empty">暂无评论</option>
-                    <option value="error">加载失败</option>
-                  </select>
-                </label>
                 <button className="tuzai-icon-button" aria-label="在 X 打开"><i className="ph ph-arrow-square-out" /></button>
                 <button className="tuzai-icon-button tuzai-close" aria-label="关闭" onClick={() => setOpen(false)}><i className="ph ph-x" /></button>
               </div>
             </header>
             <div className="tuzai-reader-grid">
               <section className="tuzai-pane tuzai-post-pane">
-                <header className="tuzai-pane-header"><div><strong>原帖</strong><span>内容、数据与互动</span></div><span className="tuzai-interactive-pill">可直接互动</span></header>
+                <header className="tuzai-pane-header"><div><strong>原帖</strong><span>X 原生内容与互动</span></div><span className="tuzai-interactive-pill">原生页面</span></header>
                 <div className="tuzai-scroll-area tuzai-post-body">
                   <MockPost metrics={metrics} onAction={handlePostAction} />
                 </div>
               </section>
               <section className="tuzai-pane tuzai-replies-pane">
-                <header className="tuzai-pane-header"><div><strong>评论</strong><span>{state === 'ready' ? `按${replySorts[replySort].orderLabel}顺序` : '读取当前会话可见内容'}</span></div><span className="tuzai-reply-count">{state === 'ready' ? replyItems.length : '—'}</span></header>
+                <header className="tuzai-pane-header"><div><strong>评论</strong><span>X 原生排序、回复与讨论</span></div><span className="tuzai-interactive-pill">独立滚动</span></header>
                 <div className="tuzai-reply-tools">
                   <div className="tuzai-context-row">
                     <div className="tuzai-sort-control">
@@ -255,7 +245,7 @@ export function App() {
                         {Object.entries(replySorts).map(([value, option]) => <button className="tuzai-sort-option" type="button" role="option" aria-selected={replySort === value} key={value} onClick={() => { setReplySort(value); setSortOpen(false); notify(`已按${option.orderLabel}排序`); }}><span>{option.orderLabel}</span>{replySort === value && <i className="ph ph-check tuzai-sort-check" />}</button>)}
                       </div>
                     </div>
-                    <a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看动态 <i className="ph ph-caret-right" /></a>
+                    <a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看引用 <i className="ph ph-caret-right" /></a>
                   </div>
                   <section className="tuzai-composer" data-target-url="https://x.com/tuzai_lab/status/2087155564904370681">
                     <img className="tuzai-composer-avatar" src="/assets/tino-avatar.png" alt="" />
@@ -264,14 +254,11 @@ export function App() {
                   </section>
                 </div>
                 <div className="tuzai-scroll-area tuzai-reply-list">
-                  {state === "ready" && sortedReplies.map((reply) => <Reply reply={reply} onAction={handleReplyAction} key={`${reply.handle}-${reply.time}`} />)}
-                  {state === "loading" && <div className="tuzai-state"><span className="tuzai-spinner" /><strong>正在读取评论</strong><p>原帖已经可以阅读，评论加载完成后会自动出现。</p></div>}
-                  {state === "empty" && <div className="tuzai-state"><i className="ph ph-chat-circle-dots" /><strong>暂时没有可见评论</strong><p>可能还没有回复，或者当前账号无权查看。</p></div>}
-                  {state === "error" && <div className="tuzai-state"><i className="ph ph-warning-circle" /><strong>评论没有加载出来</strong><p>检查网络后可以重新读取，不会影响主页位置。</p><button onClick={() => setState('loading')}>重新读取</button></div>}
+                  {sortedReplies.map((reply) => <Reply reply={reply} onAction={handleReplyAction} key={`${reply.handle}-${reply.time}`} />)}
                 </div>
               </section>
             </div>
-            <footer className="tuzai-footer"><span><i className="ph ph-lock-key" /> 内容本地处理 · 互动同步到当前 X 账号</span><span>Esc 关闭</span></footer>
+            <footer className="tuzai-footer"><span><i className="ph ph-lock-key" /> 两栏均由当前登录的 X 原生页面提供</span><span>Esc 关闭</span></footer>
             {toast && <div className="tuzai-toast" role="status">{toast}</div>}
           </section>
         </div>

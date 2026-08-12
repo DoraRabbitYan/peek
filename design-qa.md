@@ -1,57 +1,55 @@
-# Design QA
+# Design QA — 双 iframe 帖子浮层
 
-- Source visual truth 1: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-e9d5980e-e913-4636-a2c6-bbf40760d530.png`
-- Source visual truth 2: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-7d869374-3ae4-4c08-bbe7-ebef608974b8.png`
-- Full implementation screenshot: `D:/GitHub/tuzai-x-popover/docs/preview.png`
-- Focused action comparison: `D:/GitHub/tuzai-x-popover/docs/qa-action-bar-normalized-verified.png`
-- Focused right-tools comparison: `D:/GitHub/tuzai-x-popover/docs/qa-right-reply-tools-normalized-verified.png`
-- Reply-sort menu evidence: `D:/GitHub/tuzai-x-popover/docs/qa-reply-sort-verified.png`
-- State: light theme, desktop two-column popover open, replies loaded
-- Source pixels: 1182 × 94 and 1196 × 266
-- Implementation viewport: 1265 × 712
+- Source visual truth: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-5954910a-33f3-4b63-bdc5-10798a640cd6.png`
+- Implementation screenshot: `D:/GitHub/tuzai-x-popover/docs/preview-double-iframe.png`
+- Combined comparison: `C:/Users/yi/AppData/Local/Temp/tuzai-double-iframe-comparison.png`
+- Browser viewport: 1265 × 712 CSS px
+- Source pixels: 1234 × 1168, density 1
+- Implementation pixels: 1265 × 712, density 1
+- Normalization: the source was cropped to the red-line boundary region and both images were scaled into a 1280 × 390 side-by-side comparison canvas. The source is a single-column boundary reference; the implementation intentionally renders the two resulting regions side by side.
+- State: light theme, reader open, default relevant reply order.
 
 ## Findings
 
-No actionable P0/P1/P2 mismatch remains for the two requested regions.
+No actionable P0, P1, or P2 visual differences remain for the agreed split behavior.
 
-Version 0.4 turns the former decorative `相关` label into a real listbox. The verified menu exposes `最相关`, `最新`, and `最多喜欢`, keeps a visible check on the selected option, updates the comments header, and persists the choice across popover close/reopen.
+- The left pane ends with the original post's five-item action row, matching the content above the red line.
+- The right pane starts with `相关 / 查看引用`, followed by the reply composer and replies, matching the content below the red line.
+- The modal remains one visual surface with a single toolbar, central divider, consistent borders, and two independent scroll regions.
+- The `查看引用` wording now follows the current X page instead of the previous incorrect `查看动态` mock label.
 
-The original-post action bar now has exactly five controls in the source order: reply, repost, like, bookmark, share. The proportional icon positions match the reference, only reply and like show their initial counts, and the share control uses the same upward-arrow anatomy.
+## Required fidelity surfaces
 
-`相关`, `查看动态`, and the reply composer now live at the top of the right comment pane. The source avatar crop is used, the helper target label is visually hidden, and the disabled reply button, left/right insets, row heights, separators, and muted colors follow the supplied crop.
+- Fonts and typography: system/X-like sans-serif stack, weights, muted metadata, and reply hierarchy remain consistent with the supplied X reference. No text clipping was observed.
+- Spacing and layout rhythm: the red-line boundary maps directly to the center-column split; pane headers, action density, separators, and composer spacing are aligned.
+- Colors and visual tokens: white surface, X foreground/muted colors, blue interaction token, subtle borders, and disabled reply state match the reference family.
+- Image quality and asset fidelity: the supplied兔仔 icon and avatar assets remain raster assets; the implementation does not introduce placeholder imagery or custom-drawn icons.
+- Copy and content: `原帖`, `评论`, `相关`, `查看引用`, reply composer text, and the native-page status copy reflect the agreed behavior.
 
-## Focused comparison evidence
+## Interaction evidence
 
-- Both source crops and both implementation crops were inspected together in the same comparison input.
-- The action bar preserves the five-item spacing ratios across a responsive pane rather than inserting an analytics control.
-- The right-tools block preserves the source hierarchy: context row, divider, avatar/placeholder/button composer, divider.
-- DOM placement audit: left context/composer count `0`; right context/composer count `1` each.
-
-## Interaction and browser checks
-
-- Original action count text changed from `2 / 1` to `2 / 1 / 2` after activating repost and like; repost, like, and bookmark active states all became true.
-- Clicking the original reply action focused the composer in the right pane.
-- Clicking `回复 若水` changed the placeholder to `发布你对若水的回复`.
-- Publishing a reply increased the visible reply count from `3` to `4` and inserted the new reply at the top.
-- Share produced `帖子链接已复制`.
-- `Escape` reduced the dialog count from `1` to `0`; `重新打开浮层` restored it to `1`.
-- Fresh-tab browser console warnings/errors: none.
-- Reply-sort menu opened with the correct selected state and ARIA roles. `最新` reordered the demo replies to 3 / 8 / 12 minutes; `最多喜欢` reordered them to 18 / 9 / 4 likes.
-- Pressing `Escape` once closed the sort menu without closing the reader; pressing it again closed the reader. Reopening preserved `最多喜欢`.
-- Read-only inspection of the signed-in X detail page confirmed the native control is a `相关` button inside the source post article, with native menu items `相关`, `最近`, and `喜欢`. The extension selectors cover this exact live structure.
-- Sort implementation first selects X's native order in the inactive detail tab, then locally normalizes the extracted recent/liked order using each reply's `<time datetime>` and like count.
-- Local preview tested: `http://127.0.0.1:55090/`.
-- Automated checks: 11/11 tests passed; extension content/background/core syntax checks and `git diff --check` passed.
+- Reply sort menu opened and closed with `Escape`.
+- Closing the reader removed the dialog; reopening restored it.
+- Left- and right-pane scroll areas accepted independent scrolling without moving the outer page.
+- Browser console warnings/errors checked: none.
+- Build and automated tests: 9/9 passed.
 
 ## Comparison history
 
-1. P1: the previous preview placed `相关`, `查看动态`, and the composer under the left original post. Fixed by moving the complete block to `.tuzai-reply-tools` above the right reply list.
-2. P1: the previous original-post bar used the wrong item set and spacing. Fixed with the exact five controls and source-measured proportional insets.
-3. P2: the first focused QA crop used incorrect screenshot coordinates. Fixed by reading the live component bounds and cropping the verified full screenshot.
-4. Post-fix evidence: combined source/implementation comparison passes, all requested interactions pass, and a fresh-tab console check is clean.
+### Iteration 1
 
-## Residual test gap
+- Earlier P1: the previous architecture cloned X DOM and proxied interactions through a hidden tab.
+- Fix: replaced extraction and action proxy code with two same-post X iframes inside one modal.
+- Earlier P1: the preview displayed `查看动态`, while the current X page uses `查看引用` for this context.
+- Fix: changed the visible preview label and delegated production wording/functionality to X's native DOM.
+- Post-fix evidence: `docs/preview-double-iframe.png` and the combined comparison above.
 
-The unpacked extension has not been installed into the user's Chrome, so no real X account write was executed during QA. Installing the extension remains a separate confirmation-gated step.
+## Residual runtime validation
+
+The visual implementation passes. Loading the unpacked extension into the user's Chrome and exercising the live X iframe DOM still requires the browser's extension-install confirmation; this is a runtime integration check rather than an unresolved visual mismatch.
+
+## Follow-up polish
+
+- P3: after live installation, tune X DOM isolation selectors if the user's current account receives a different experiment layout.
 
 final result: passed
