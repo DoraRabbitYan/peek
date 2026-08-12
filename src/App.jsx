@@ -5,6 +5,7 @@ const initialReplies = [
     name: "若水",
     handle: "@ruoshui",
     time: "12分钟",
+    minutesAgo: 12,
     text: "这个交互很适合看长讨论，时间线不用来回跳了。",
     likes: 18,
     views: 92,
@@ -13,6 +14,7 @@ const initialReplies = [
     name: "阿林",
     handle: "@alin_builds",
     time: "8分钟",
+    minutesAgo: 8,
     text: "左边保留原帖、右边只滚评论，比直接放大详情页更清楚。",
     likes: 9,
     views: 51,
@@ -21,11 +23,18 @@ const initialReplies = [
     name: "松塔",
     handle: "@pinecone",
     time: "3分钟",
+    minutesAgo: 3,
     text: "希望支持 Esc 关闭，以及从评论继续打开子讨论。",
     likes: 4,
     views: 27,
   },
 ];
+
+const replySorts = {
+  relevant: { label: "相关", orderLabel: "最相关" },
+  recent: { label: "最新", orderLabel: "最新" },
+  liked: { label: "最多喜欢", orderLabel: "最多喜欢" },
+};
 
 function Action({ icon, children, active = false, label, onClick }) {
   return (
@@ -127,16 +136,26 @@ export function App() {
   const [replyItems, setReplyItems] = useState(initialReplies);
   const [replyTarget, setReplyTarget] = useState("原帖");
   const [replyText, setReplyText] = useState("");
+  const [replySort, setReplySort] = useState("relevant");
+  const [sortOpen, setSortOpen] = useState(false);
   const [toast, setToast] = useState("");
   const toastTimer = useRef(null);
 
   useEffect(() => {
     const closeOnEscape = (event) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key !== "Escape") return;
+      if (sortOpen) setSortOpen(false);
+      else setOpen(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, []);
+  }, [sortOpen]);
+
+  const sortedReplies = [...replyItems].sort((left, right) => {
+    if (replySort === "recent") return (left.minutesAgo ?? Number.MAX_SAFE_INTEGER) - (right.minutesAgo ?? Number.MAX_SAFE_INTEGER);
+    if (replySort === "liked") return (right.likes + Number(Boolean(right.liked))) - (left.likes + Number(Boolean(left.liked)));
+    return 0;
+  });
 
   const notify = (message) => {
     window.clearTimeout(toastTimer.current);
@@ -186,7 +205,7 @@ export function App() {
   const publishReply = () => {
     const text = replyText.trim();
     if (!text) return;
-    setReplyItems((current) => [{ name: "Tino Xu", handle: "@Tino_Xu_", time: "刚刚", text, likes: 0, liked: false }, ...current]);
+    setReplyItems((current) => [{ name: "Tino Xu", handle: "@Tino_Xu_", time: "刚刚", minutesAgo: 0, text, likes: 0, liked: false }, ...current]);
     setReplyText("");
     setReplyTarget("原帖");
     notify("回复已发布到 X");
@@ -227,9 +246,17 @@ export function App() {
                 </div>
               </section>
               <section className="tuzai-pane tuzai-replies-pane">
-                <header className="tuzai-pane-header"><div><strong>评论</strong><span>{state === 'ready' ? '按 X 默认顺序' : '读取当前会话可见内容'}</span></div><span className="tuzai-reply-count">{state === 'ready' ? replyItems.length : '—'}</span></header>
+                <header className="tuzai-pane-header"><div><strong>评论</strong><span>{state === 'ready' ? `按${replySorts[replySort].orderLabel}顺序` : '读取当前会话可见内容'}</span></div><span className="tuzai-reply-count">{state === 'ready' ? replyItems.length : '—'}</span></header>
                 <div className="tuzai-reply-tools">
-                  <div className="tuzai-context-row"><span>相关 <i className="ph ph-caret-down" /></span><a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看动态 <i className="ph ph-caret-right" /></a></div>
+                  <div className="tuzai-context-row">
+                    <div className="tuzai-sort-control">
+                      <button className="tuzai-sort-trigger" type="button" aria-haspopup="listbox" aria-expanded={sortOpen} aria-label="评论排序" onClick={() => setSortOpen((current) => !current)}><span>{replySorts[replySort].label}</span><i className="ph ph-caret-down" /></button>
+                      <div className="tuzai-sort-menu" role="listbox" aria-label="选择评论排序方式" hidden={!sortOpen}>
+                        {Object.entries(replySorts).map(([value, option]) => <button className="tuzai-sort-option" type="button" role="option" aria-selected={replySort === value} key={value} onClick={() => { setReplySort(value); setSortOpen(false); notify(`已按${option.orderLabel}排序`); }}><span>{option.orderLabel}</span>{replySort === value && <i className="ph ph-check tuzai-sort-check" />}</button>)}
+                      </div>
+                    </div>
+                    <a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看动态 <i className="ph ph-caret-right" /></a>
+                  </div>
                   <section className="tuzai-composer" data-target-url="https://x.com/tuzai_lab/status/2087155564904370681">
                     <img className="tuzai-composer-avatar" src="/assets/tino-avatar.png" alt="" />
                     <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea rows="2" maxLength="280" value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /></div>
@@ -237,7 +264,7 @@ export function App() {
                   </section>
                 </div>
                 <div className="tuzai-scroll-area tuzai-reply-list">
-                  {state === "ready" && replyItems.map((reply) => <Reply reply={reply} onAction={handleReplyAction} key={`${reply.handle}-${reply.time}`} />)}
+                  {state === "ready" && sortedReplies.map((reply) => <Reply reply={reply} onAction={handleReplyAction} key={`${reply.handle}-${reply.time}`} />)}
                   {state === "loading" && <div className="tuzai-state"><span className="tuzai-spinner" /><strong>正在读取评论</strong><p>原帖已经可以阅读，评论加载完成后会自动出现。</p></div>}
                   {state === "empty" && <div className="tuzai-state"><i className="ph ph-chat-circle-dots" /><strong>暂时没有可见评论</strong><p>可能还没有回复，或者当前账号无权查看。</p></div>}
                   {state === "error" && <div className="tuzai-state"><i className="ph ph-warning-circle" /><strong>评论没有加载出来</strong><p>检查网络后可以重新读取，不会影响主页位置。</p><button onClick={() => setState('loading')}>重新读取</button></div>}

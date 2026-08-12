@@ -14,6 +14,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - The core interaction keeps the X timeline in place and opens a modal reader: original post on the left, replies on the right.
 - The original-post action bar must preserve X's native five-item order and density: reply, repost, like, bookmark, share. Do not insert analytics into that row.
 - The conversation controls shown below an X detail post (`相关`, `查看动态`, and the reply composer) belong at the top of the right replies pane, above the reply list.
+- The `相关` control is a functional reply-sort dropdown, not decorative UI. It must support relevant, recent, and most-liked ordering, prefer X's native sorter, and locally normalize the extracted recent/liked order.
 - The extension preserves native post interactions inside the popover. Reply, repost, like, bookmark, share, analytics, and quote-activity entry points must not be reduced to decorative or permanently disabled controls.
 - It uses no third-party backend, requests only `storage`, `tabs`, and X/Twitter host access, and must not request cookie or all-sites access.
 - Reply extraction and account actions use a temporary inactive X tab so the extension can reuse the user's normal signed-in page without depending on private GraphQL operation IDs. Keep that proxy tab only while the popover is open, and close it on cancel/close.

@@ -40,6 +40,7 @@ async function openPost(message, sender) {
     openerTabId,
     requestId: message.requestId,
     url: message.url,
+    sort: message.sort || "relevant",
     createdAt: Date.now()
   });
 }
@@ -53,7 +54,8 @@ async function beginExtraction(sender) {
   await chrome.tabs.sendMessage(loaderTabId, {
     type: "TUZAI_BEGIN_EXTRACTION",
     requestId: job.requestId,
-    url: job.url
+    url: job.url,
+    sort: job.sort || "relevant"
   });
 }
 

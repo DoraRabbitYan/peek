@@ -5,6 +5,7 @@
 - Full implementation screenshot: `D:/GitHub/tuzai-x-popover/docs/preview.png`
 - Focused action comparison: `D:/GitHub/tuzai-x-popover/docs/qa-action-bar-normalized-verified.png`
 - Focused right-tools comparison: `D:/GitHub/tuzai-x-popover/docs/qa-right-reply-tools-normalized-verified.png`
+- Reply-sort menu evidence: `D:/GitHub/tuzai-x-popover/docs/qa-reply-sort-verified.png`
 - State: light theme, desktop two-column popover open, replies loaded
 - Source pixels: 1182 × 94 and 1196 × 266
 - Implementation viewport: 1265 × 712
@@ -12,6 +13,8 @@
 ## Findings
 
 No actionable P0/P1/P2 mismatch remains for the two requested regions.
+
+Version 0.4 turns the former decorative `相关` label into a real listbox. The verified menu exposes `最相关`, `最新`, and `最多喜欢`, keeps a visible check on the selected option, updates the comments header, and persists the choice across popover close/reopen.
 
 The original-post action bar now has exactly five controls in the source order: reply, repost, like, bookmark, share. The proportional icon positions match the reference, only reply and like show their initial counts, and the share control uses the same upward-arrow anatomy.
 
@@ -33,8 +36,12 @@ The original-post action bar now has exactly five controls in the source order: 
 - Share produced `帖子链接已复制`.
 - `Escape` reduced the dialog count from `1` to `0`; `重新打开浮层` restored it to `1`.
 - Fresh-tab browser console warnings/errors: none.
+- Reply-sort menu opened with the correct selected state and ARIA roles. `最新` reordered the demo replies to 3 / 8 / 12 minutes; `最多喜欢` reordered them to 18 / 9 / 4 likes.
+- Pressing `Escape` once closed the sort menu without closing the reader; pressing it again closed the reader. Reopening preserved `最多喜欢`.
+- Read-only inspection of the signed-in X detail page confirmed the native control is a `相关` button inside the source post article, with native menu items `相关`, `最近`, and `喜欢`. The extension selectors cover this exact live structure.
+- Sort implementation first selects X's native order in the inactive detail tab, then locally normalizes the extracted recent/liked order using each reply's `<time datetime>` and like count.
 - Local preview tested: `http://127.0.0.1:55090/`.
-- Automated checks: 10/10 tests passed; extension content script syntax check and `git diff --check` passed.
+- Automated checks: 11/11 tests passed; extension content/background/core syntax checks and `git diff --check` passed.
 
 ## Comparison history
 

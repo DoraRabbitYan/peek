@@ -52,8 +52,19 @@
 .tuzai-cloned-article button[data-tuzai-action][aria-busy="true"] { opacity: .46; pointer-events: none; }
 .tuzai-reply-list > .tuzai-cloned-article { width: 100%; border-bottom: 1px solid var(--tuzai-border) !important; }
 .tuzai-context-row { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 28px 0 6px; border-top: 1px solid var(--tuzai-border); border-bottom: 1px solid var(--tuzai-border); color: var(--tuzai-muted); font-weight: 650; }
-.tuzai-context-row > span, .tuzai-context-row > a { display: inline-flex; align-items: center; gap: 4px; color: inherit; text-decoration: none; }
+.tuzai-context-row > a { display: inline-flex; align-items: center; gap: 4px; color: inherit; text-decoration: none; }
 .tuzai-context-row > a:hover { text-decoration: underline; }
+.tuzai-sort-control { position: relative; align-self: stretch; display: flex; align-items: center; }
+.tuzai-sort-trigger { display: inline-flex; align-items: center; gap: 5px; min-height: 100%; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: 650; cursor: pointer; }
+.tuzai-sort-trigger:hover { color: var(--tuzai-fg); }
+.tuzai-sort-trigger:disabled { cursor: progress; opacity: .62; }
+.tuzai-sort-trigger:focus-visible { outline: 2px solid var(--tuzai-accent); outline-offset: 3px; border-radius: 4px; }
+.tuzai-sort-menu { position: absolute; z-index: 5; top: calc(100% + 7px); left: -6px; width: 176px; overflow: hidden; border: 1px solid var(--tuzai-border); border-radius: 14px; background: var(--tuzai-bg); box-shadow: 0 10px 32px rgba(15,20,25,.2); }
+.tuzai-sort-menu[hidden] { display: none; }
+.tuzai-sort-option { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 0; padding: 0 15px; background: transparent; color: var(--tuzai-fg); font: inherit; font-weight: 650; text-align: left; cursor: pointer; }
+.tuzai-sort-option:hover, .tuzai-sort-option:focus-visible { background: var(--tuzai-soft); outline: 0; }
+.tuzai-sort-option[aria-selected="true"] { color: var(--tuzai-accent); }
+.tuzai-sort-check { font-size: 18px; }
 .tuzai-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 14px 28px 14px 6px; border-bottom: 1px solid var(--tuzai-border); background: var(--tuzai-bg); }
 .tuzai-composer-avatar { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; background: var(--tuzai-soft); color: var(--tuzai-muted); font-size: 21px; }
 .tuzai-composer-body { min-width: 0; display: grid; }

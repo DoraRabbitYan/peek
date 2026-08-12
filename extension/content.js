@@ -4,6 +4,16 @@
   const Core = globalThis.TuzaiCore;
   const ROOT_ID = "tuzai-x-popover-root";
   const MAX_REPLIES = 36;
+  const REPLY_SORTS = {
+    relevant: { label: "相关", orderLabel: "最相关" },
+    recent: { label: "最新", orderLabel: "最新" },
+    liked: { label: "最多喜欢", orderLabel: "最多喜欢" }
+  };
+  const X_SORT_LABELS = {
+    relevant: ["相关", "最相关", "relevant", "most relevant"],
+    recent: ["最新", "最近", "recent", "most recent"],
+    liked: ["喜欢", "最多喜欢", "最多点赞", "最受喜欢", "likes", "most liked"]
+  };
   const state = {
     enabled: true,
     requestId: null,
@@ -11,7 +21,8 @@
     sourceArticle: null,
     previousBodyOverflow: "",
     activeReplyUrl: null,
-    toastTimer: null
+    toastTimer: null,
+    replySort: "relevant"
   };
 
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -240,6 +251,82 @@
     return composer;
   }
 
+  function updateReplySortUi() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    const option = REPLY_SORTS[state.replySort] || REPLY_SORTS.relevant;
+    const label = root.querySelector(".tuzai-sort-label");
+    const order = root.querySelector(".tuzai-reply-order");
+    if (label) label.textContent = option.label;
+    if (order) order.textContent = `按${option.orderLabel}顺序`;
+    root.querySelectorAll(".tuzai-sort-option").forEach((button) => {
+      const selected = button.dataset.sort === state.replySort;
+      button.setAttribute("aria-selected", String(selected));
+      button.querySelector(".tuzai-sort-check")?.toggleAttribute("hidden", !selected);
+    });
+  }
+
+  function closeReplySortMenu() {
+    const root = document.getElementById(ROOT_ID);
+    const trigger = root?.querySelector(".tuzai-sort-trigger");
+    const menu = root?.querySelector(".tuzai-sort-menu");
+    if (!trigger || !menu) return;
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+  }
+
+  function selectReplySort(sort) {
+    const next = Core.normalizeReplySort(sort);
+    closeReplySortMenu();
+    if (next === state.replySort) return;
+    state.replySort = next;
+    chrome.storage.sync.set({ replySort: next }).catch(() => {});
+    updateReplySortUi();
+    requestReplies();
+  }
+
+  function createReplySortControl() {
+    const control = document.createElement("div");
+    control.className = "tuzai-sort-control";
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "tuzai-sort-trigger";
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.setAttribute("aria-label", "评论排序");
+    const label = document.createElement("span");
+    label.className = "tuzai-sort-label";
+    trigger.append(label, icon("ph-caret-down"));
+
+    const menu = document.createElement("div");
+    menu.className = "tuzai-sort-menu";
+    menu.setAttribute("role", "listbox");
+    menu.setAttribute("aria-label", "选择评论排序方式");
+    menu.hidden = true;
+    Object.entries(REPLY_SORTS).forEach(([value, option]) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "tuzai-sort-option";
+      item.dataset.sort = value;
+      item.setAttribute("role", "option");
+      const text = document.createElement("span");
+      text.textContent = option.orderLabel;
+      const check = icon("ph-check");
+      check.classList.add("tuzai-sort-check");
+      item.append(text, check);
+      item.addEventListener("click", () => selectReplySort(value));
+      menu.append(item);
+    });
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const willOpen = menu.hidden;
+      menu.hidden = !willOpen;
+      trigger.setAttribute("aria-expanded", String(willOpen));
+    });
+    control.append(trigger, menu);
+    return control;
+  }
+
   async function handleClonedContentClick(event) {
     const clonedArticle = event.target.closest?.(".tuzai-cloned-article");
     if (!clonedArticle) return;
@@ -296,6 +383,9 @@
     const count = root.querySelector(".tuzai-reply-count");
     if (!list || !count) return;
     list.replaceChildren();
+    const sortTrigger = root.querySelector(".tuzai-sort-trigger");
+    if (sortTrigger) sortTrigger.disabled = kind === "loading";
+    updateReplySortUi();
 
     if (details.source?.html) {
       const sourceTemplate = document.createElement("template");
@@ -367,7 +457,8 @@
     return chrome.runtime.sendMessage({
       type: "TUZAI_OPEN_POST",
       requestId: state.requestId,
-      url: state.sourceUrl
+      url: state.sourceUrl,
+      sort: state.replySort
     }).then((response) => {
       if (!response?.ok) setReplyState("error", { error: response?.error || "无法启动评论读取" });
     }).catch((error) => setReplyState("error", { error: error.message }));
@@ -409,7 +500,7 @@
           <div class="tuzai-scroll-area tuzai-post-body"></div>
         </section>
         <section class="tuzai-pane tuzai-replies-pane">
-          <header class="tuzai-pane-header"><div><strong>评论</strong><span>按 X 当前默认顺序</span></div><span class="tuzai-reply-count">—</span></header>
+          <header class="tuzai-pane-header"><div><strong>评论</strong><span class="tuzai-reply-order">按最相关顺序</span></div><span class="tuzai-reply-count">—</span></header>
           <div class="tuzai-reply-tools"></div>
           <div class="tuzai-scroll-area tuzai-reply-list"></div>
         </section>
@@ -427,8 +518,7 @@
     const postBody = dialog.querySelector(".tuzai-post-body");
     const contextRow = document.createElement("div");
     contextRow.className = "tuzai-context-row";
-    const related = document.createElement("span");
-    related.append(document.createTextNode("相关"), icon("ph-caret-down"));
+    const related = createReplySortControl();
     const activity = document.createElement("a");
     activity.href = `${url}/quotes`;
     activity.target = "_blank";
@@ -439,9 +529,13 @@
     dialog.querySelector(".tuzai-reply-tools").append(contextRow, createReplyComposer());
     postBody.addEventListener("click", handleClonedContentClick, true);
     dialog.querySelector(".tuzai-reply-list").addEventListener("click", handleClonedContentClick, true);
+    root.addEventListener("click", (event) => {
+      if (!event.target.closest?.(".tuzai-sort-control")) closeReplySortMenu();
+    });
 
     root.append(backdrop, dialog);
     document.body.append(root);
+    updateReplySortUi();
     close.focus();
     requestReplies();
   }
@@ -470,9 +564,63 @@
     throw new Error("等待帖子详情超时");
   }
 
-  async function extractConversation(requestId) {
+  function normalizedControlText(node) {
+    return String(node?.innerText || node?.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function sortFromControl(node) {
+    const text = normalizedControlText(node);
+    return Object.entries(X_SORT_LABELS).find(([, labels]) => labels.some((label) => text === label || text.startsWith(`${label} `)))?.[0] || null;
+  }
+
+  function isVisibleControl(node) {
+    const rect = node?.getBoundingClientRect?.();
+    return Boolean(rect && rect.width > 0 && rect.height > 0 && getComputedStyle(node).visibility !== "hidden");
+  }
+
+  function findNativeSortTrigger(column) {
+    return [...column.querySelectorAll('button, [role="button"]')].find((node) => (
+      isVisibleControl(node) && sortFromControl(node)
+    )) || null;
+  }
+
+  async function applyNativeReplySort(sort, column) {
+    const requested = Core.normalizeReplySort(sort);
+    const trigger = findNativeSortTrigger(column);
+    if (!trigger) return false;
+    if (sortFromControl(trigger) === requested) return false;
+    trigger.click();
+
+    const deadline = Date.now() + 5000;
+    let option = null;
+    while (Date.now() < deadline && !option) {
+      option = [...document.querySelectorAll('[role="menuitemradio"], [role="menuitem"], [role="option"], button, [role="button"]')].find((node) => (
+        node !== trigger && isVisibleControl(node) && sortFromControl(node) === requested
+      ));
+      if (!option) await delay(120);
+    }
+    if (!option) return false;
+    option.click();
+    await delay(950);
+    window.scrollTo({ top: 0, behavior: "instant" });
+    return true;
+  }
+
+  function replyMetadata(article) {
+    const like = article.querySelector('[data-testid="like"], [data-testid="unlike"]');
+    const likeText = `${like?.innerText || ""} ${like?.getAttribute("aria-label") || ""}`;
+    return {
+      createdAt: article.querySelector("time")?.dateTime || "",
+      likeCount: Core.parseCompactCount(likeText)
+    };
+  }
+
+  async function extractConversation(requestId, requestedSort = "relevant") {
     try {
       let { column, articles } = await waitForConversation();
+      const sort = Core.normalizeReplySort(requestedSort);
+      const changed = await applyNativeReplySort(sort, column);
+      if (changed) ({ column, articles } = await waitForConversation());
       const initialArticle = articles[0];
       const source = initialArticle ? { url: findPostUrl(initialArticle), html: initialArticle.outerHTML } : null;
       const sourceId = Core.postIdFromUrl(source?.url);
@@ -486,10 +634,11 @@
         lastCount = articles.length;
       }
 
-      const items = Core.uniqueByPostId(articles.map((article) => ({
+      const items = Core.sortReplyItems(Core.uniqueByPostId(articles.map((article) => ({
         url: findPostUrl(article),
-        html: article.outerHTML
-      }))).filter((item) => Core.postIdFromUrl(item.url) !== sourceId).slice(0, MAX_REPLIES);
+        html: article.outerHTML,
+        ...replyMetadata(article)
+      }))).filter((item) => Core.postIdFromUrl(item.url) !== sourceId), sort).slice(0, MAX_REPLIES);
 
       await chrome.runtime.sendMessage({
         type: "TUZAI_EXTRACTION_RESULT",
@@ -586,7 +735,16 @@
 
   window.addEventListener("click", handleTimelineClick, true);
   window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && document.getElementById(ROOT_ID)) closePopover();
+    if (event.key !== "Escape" || !document.getElementById(ROOT_ID)) return;
+    const menu = document.querySelector(`#${ROOT_ID} .tuzai-sort-menu`);
+    if (menu && !menu.hidden) {
+      closeReplySortMenu();
+      document.querySelector(`#${ROOT_ID} .tuzai-sort-trigger`)?.focus();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    closePopover();
   }, true);
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -594,7 +752,7 @@
       state.enabled = Boolean(message.enabled);
       if (!state.enabled) closePopover();
     } else if (message?.type === "TUZAI_BEGIN_EXTRACTION") {
-      extractConversation(message.requestId);
+      extractConversation(message.requestId, message.sort);
     } else if (message?.type === "TUZAI_EXTRACTION_RESULT" && message.requestId === state.requestId) {
       setReplyState(message.replies?.length ? "ready" : "empty", { source: message.source, replies: message.replies ?? [] });
     } else if (message?.type === "TUZAI_EXTRACTION_ERROR" && message.requestId === state.requestId) {
@@ -608,11 +766,18 @@
     return false;
   });
 
-  chrome.storage.sync.get({ enabled: true }).then(({ enabled }) => { state.enabled = enabled; });
+  chrome.storage.sync.get({ enabled: true, replySort: "relevant" }).then(({ enabled, replySort }) => {
+    state.enabled = enabled;
+    state.replySort = Core.normalizeReplySort(replySort);
+  });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && changes.enabled) {
       state.enabled = changes.enabled.newValue;
       if (!state.enabled) closePopover();
+    }
+    if (area === "sync" && changes.replySort) {
+      state.replySort = Core.normalizeReplySort(changes.replySort.newValue);
+      updateReplySortUi();
     }
   });
   chrome.runtime.sendMessage({ type: "TUZAI_CONTENT_READY" }).catch(() => {});

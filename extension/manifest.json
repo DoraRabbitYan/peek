@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "兔仔 · X 帖子浮层阅读器",
   "short_name": "兔仔浮层",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "在 X 时间线直接用双栏浮层阅读和操作原帖与评论，关闭后继续留在原位置。",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*"],

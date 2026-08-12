@@ -40,13 +40,27 @@ test("maps the native X action controls preserved in cloned posts", () => {
   assert.equal(Core.actionNameFromMetadata("tweetPhoto"), null);
 });
 
+test("normalizes and applies reply sorting without mutating the source list", () => {
+  const replies = [
+    { id: "older-popular", createdAt: "2026-08-10T08:00:00Z", likeCount: 80 },
+    { id: "newer", createdAt: "2026-08-12T08:00:00Z", likeCount: 3 },
+    { id: "middle", createdAt: "2026-08-11T08:00:00Z", likeCount: 12 }
+  ];
+  assert.equal(Core.normalizeReplySort("unknown"), "relevant");
+  assert.deepEqual(Array.from(Core.sortReplyItems(replies, "recent"), (item) => item.id), ["newer", "middle", "older-popular"]);
+  assert.deepEqual(Array.from(Core.sortReplyItems(replies, "liked"), (item) => item.id), ["older-popular", "middle", "newer"]);
+  assert.deepEqual(replies.map((item) => item.id), ["older-popular", "newer", "middle"]);
+  assert.equal(Core.parseCompactCount("1.2万 喜欢"), 12000);
+  assert.equal(Core.parseCompactCount("3.4K Likes"), 3400);
+});
+
 test("manifest keeps permissions limited to local state, tabs, and X hosts", async () => {
   const manifest = JSON.parse(await readFile(path.resolve("extension/manifest.json"), "utf8"));
   assert.deepEqual([...manifest.permissions].sort(), ["storage", "tabs"]);
   assert.deepEqual(manifest.host_permissions, ["https://x.com/*", "https://twitter.com/*"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
-  assert.equal(manifest.version, "0.3.0");
+  assert.equal(manifest.version, "0.4.0");
 });
 
 test("interactive proxy keeps account actions local to X", async () => {
@@ -59,6 +73,10 @@ test("interactive proxy keeps account actions local to X", async () => {
   assert.match(content, /可直接互动/);
   assert.match(content, /querySelector\("\.tuzai-reply-tools"\)\.append\(contextRow, createReplyComposer\(\)\)/);
   assert.doesNotMatch(content, /postBody\.append\(contextRow/);
+  assert.match(content, /createReplySortControl/);
+  assert.match(content, /sort: state\.replySort/);
+  assert.match(content, /applyNativeReplySort/);
+  assert.match(background, /sort: message\.sort \|\| "relevant"/);
   assert.match(background, /TUZAI_ACTION/);
   assert.doesNotMatch(content, /fetch\(/);
   assert.doesNotMatch(background, /fetch\(/);
