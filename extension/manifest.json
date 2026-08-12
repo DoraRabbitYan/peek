@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "兔仔 · X 帖子浮层阅读器",
+  "short_name": "兔仔浮层",
+  "version": "0.1.0",
+  "description": "在 X 时间线直接用双栏浮层阅读原帖和评论，关闭后继续留在原位置。",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "兔仔帖子浮层",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "css": ["vendor/phosphor/style.css", "content.css"],
+      "js": ["core.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/phosphor/Phosphor.woff2", "icons/icon48.png"],
+      "matches": ["https://x.com/*", "https://twitter.com/*"]
+    }
+  ]
+}

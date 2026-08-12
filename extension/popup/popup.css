@@ -1,0 +1,20 @@
+:root { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; color: #0f1419; background: #f5f7f8; }
+* { box-sizing: border-box; }
+body { margin: 0; width: 330px; }
+.popup-card { padding: 18px; }
+header { display: flex; gap: 11px; align-items: center; margin-bottom: 18px; }
+header img { width: 42px; height: 42px; border-radius: 11px; }
+header div, .toggle-row div { display: grid; gap: 3px; }
+header strong { font-size: 16px; }
+header span, .toggle-row span { color: #536471; font-size: 12px; }
+.toggle-row { position: relative; display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 15px; border: 1px solid #e4e9ec; border-radius: 14px; background: #fff; cursor: pointer; }
+.toggle-row input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle { width: 42px; height: 24px; border-radius: 999px; background: #c7d0d6; transition: background .16s ease; }
+.toggle::after { content: ""; display: block; width: 18px; height: 18px; margin: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(15,20,25,.3); transition: transform .16s ease; }
+input:checked + .toggle { background: #1d9bf0; }
+input:checked + .toggle::after { transform: translateX(18px); }
+input:focus-visible + .toggle { outline: 2px solid #1d9bf0; outline-offset: 2px; }
+.privacy-note { display: flex; gap: 9px; margin-top: 12px; padding: 12px 13px; border-radius: 12px; background: #eaf6fd; color: #30556d; }
+.privacy-note i { margin-top: 2px; font-size: 20px; }
+.privacy-note p { margin: 0; font-size: 12px; line-height: 1.5; }
+footer { padding: 13px 2px 0; color: #536471; font-size: 12px; text-align: center; }
