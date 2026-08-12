@@ -53,8 +53,10 @@ button { color: inherit; }
 .demo-quote-title .demo-avatar { width: 24px; height: 24px; font-size: 14px; }
 .demo-quote-card p { margin: 10px 0 0; line-height: 1.45; }
 .demo-metrics { display: flex; justify-content: space-between; padding: 17px 4px 0; color: var(--tuzai-muted); }
-.demo-action { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.demo-action { display: inline-flex; gap: 6px; align-items: center; border: 0; padding: 4px; background: transparent; color: inherit; font-size: 13px; cursor: pointer; }
 .demo-action i { font-size: 18px; }
+.demo-action:hover { color: var(--tuzai-accent); }
+.demo-action[data-active="true"] { color: var(--tuzai-accent); }
 .demo-reply-card { display: flex; gap: 11px; padding: 18px 20px; border-bottom: 1px solid var(--tuzai-border); }
 .demo-reply-main { min-width: 0; flex: 1; }
 .demo-reply-meta { display: flex; gap: 5px; align-items: center; }

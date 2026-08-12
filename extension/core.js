@@ -33,5 +33,16 @@
     });
   }
 
-  root.TuzaiCore = { normalizePostUrl, postIdFromUrl, uniqueByPostId };
+  function actionNameFromMetadata(testId = "", ariaLabel = "") {
+    const id = String(testId);
+    if (id === "reply") return "reply";
+    if (id === "retweet" || id === "unretweet") return "retweet";
+    if (id === "like" || id === "unlike") return "like";
+    if (id === "bookmark" || id === "removeBookmark") return "bookmark";
+    if (id === "caret") return "more";
+    if (/分享帖子|share post/i.test(String(ariaLabel))) return "share";
+    return null;
+  }
+
+  root.TuzaiCore = { normalizePostUrl, postIdFromUrl, uniqueByPostId, actionNameFromMetadata };
 })(globalThis);

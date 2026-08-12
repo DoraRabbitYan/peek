@@ -63,26 +63,58 @@ async function forwardResult(message, sender) {
   const job = await readJob(loaderTabId);
   if (!job || job.requestId !== message.requestId) return;
 
-  try {
-    await chrome.tabs.sendMessage(job.openerTabId, {
-      type: message.type,
-      requestId: job.requestId,
-      replies: message.replies ?? [],
-      error: message.error ?? null
-    });
-  } finally {
-    await clearJob(loaderTabId);
+  await chrome.tabs.sendMessage(job.openerTabId, {
+    type: message.type,
+    requestId: job.requestId,
+    source: message.source ?? null,
+    replies: message.replies ?? [],
+    error: message.error ?? null
+  });
+
+  job.extractedAt = Date.now();
+  await storeJob(loaderTabId, job);
+}
+
+async function allJobs() {
+  const stored = await chrome.storage.session.get(null);
+  const restored = Object.entries(stored)
+    .filter(([key, value]) => key.startsWith(JOB_PREFIX) && value?.loaderTabId)
+    .map(([, value]) => value);
+  for (const job of restored) loaderJobs.set(job.loaderTabId, job);
+  return restored;
+}
+
+async function findOpenerJob(openerTabId, requestId) {
+  const jobs = await allJobs();
+  return jobs.find((job) => job.openerTabId === openerTabId && job.requestId === requestId) ?? null;
+}
+
+async function performAction(message, sender) {
+  const openerTabId = sender.tab?.id;
+  if (!openerTabId || !message.requestId || !message.url || !message.action) {
+    throw new Error("交互请求不完整");
   }
+
+  const job = await findOpenerJob(openerTabId, message.requestId);
+  if (!job) throw new Error("帖子交互会话已经结束，请重新打开浮层");
+
+  return chrome.tabs.sendMessage(job.loaderTabId, {
+    type: "TUZAI_PERFORM_ACTION",
+    requestId: job.requestId,
+    url: message.url,
+    action: message.action,
+    text: message.text ?? ""
+  });
 }
 
 async function cancelRequest(message, sender) {
   const openerTabId = sender.tab?.id;
   if (!openerTabId) return;
 
-  const jobs = [...loaderJobs.entries()];
-  for (const [loaderTabId, job] of jobs) {
+  const jobs = await allJobs();
+  for (const job of jobs) {
     if (job.openerTabId === openerTabId && job.requestId === message.requestId) {
-      await clearJob(loaderTabId);
+      await clearJob(job.loaderTabId);
     }
   }
 }
@@ -100,6 +132,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "TUZAI_EXTRACTION_ERROR":
         await forwardResult(message, sender);
         return { ok: true };
+      case "TUZAI_ACTION":
+        return performAction(message, sender);
       case "TUZAI_CANCEL":
         await cancelRequest(message, sender);
         return { ok: true };
@@ -113,5 +147,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  if (loaderJobs.has(tabId)) await clearJob(tabId, false);
+  const jobs = await allJobs();
+  for (const job of jobs) {
+    if (job.loaderTabId === tabId) await clearJob(tabId, false);
+    else if (job.openerTabId === tabId) await clearJob(job.loaderTabId);
+  }
 });

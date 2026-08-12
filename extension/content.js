@@ -9,7 +9,9 @@
     requestId: null,
     sourceUrl: null,
     sourceArticle: null,
-    previousBodyOverflow: ""
+    previousBodyOverflow: "",
+    activeReplyUrl: null,
+    toastTimer: null
   };
 
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,7 +36,7 @@
     return !article.parentElement?.closest('article[data-testid="tweet"]');
   }
 
-  function scrubClone(root) {
+  function scrubClone(root, postUrl = null) {
     root.querySelectorAll("script, iframe, object, embed, form").forEach((node) => node.remove());
     root.querySelectorAll("*").forEach((node) => {
       for (const attribute of [...node.attributes]) {
@@ -44,21 +46,223 @@
     root.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
     root.querySelectorAll("[tabindex]").forEach((node) => node.setAttribute("tabindex", "-1"));
     root.querySelectorAll("button").forEach((button) => {
-      button.setAttribute("aria-disabled", "true");
-      button.setAttribute("tabindex", "-1");
+      const action = Core.actionNameFromMetadata(button.dataset.testid, button.getAttribute("aria-label"));
+      if (action) {
+        button.removeAttribute("aria-disabled");
+        button.removeAttribute("disabled");
+        button.setAttribute("tabindex", "0");
+        button.dataset.tuzaiAction = action;
+      } else {
+        button.setAttribute("tabindex", "-1");
+      }
     });
     root.querySelectorAll("video").forEach((video) => {
       video.controls = true;
       video.muted = true;
     });
     root.classList.add("tuzai-cloned-article");
+    const normalizedUrl = Core.normalizePostUrl(postUrl || findPostUrl(root), location.href);
+    if (normalizedUrl) root.dataset.tuzaiPostUrl = normalizedUrl;
     return root;
   }
 
-  function handleClonedContentClick(event) {
+  function showToast(message, tone = "default") {
+    const root = document.getElementById(ROOT_ID);
+    const toast = root?.querySelector(".tuzai-toast");
+    if (!toast) return;
+    window.clearTimeout(state.toastTimer);
+    toast.textContent = message;
+    toast.dataset.tone = tone;
+    toast.hidden = false;
+    state.toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2400);
+  }
+
+  function actionFromTarget(target) {
+    const button = target.closest?.("button");
+    if (!button) return null;
+    return Core.actionNameFromMetadata(button.dataset.testid, button.getAttribute("aria-label"));
+  }
+
+  function clonePostUrl(target) {
+    return target.closest?.(".tuzai-cloned-article")?.dataset.tuzaiPostUrl || state.sourceUrl;
+  }
+
+  function replaceArticleClone(article) {
+    if (!article?.url || !article.html) return;
+    const template = document.createElement("template");
+    template.innerHTML = article.html;
+    const nextArticle = template.content.querySelector('article[data-testid="tweet"]') ?? template.content.firstElementChild;
+    if (!nextArticle) return;
+    const selector = `.tuzai-cloned-article[data-tuzai-post-url="${CSS.escape(article.url)}"]`;
+    document.querySelectorAll(selector).forEach((current) => {
+      current.replaceWith(scrubClone(nextArticle.cloneNode(true), article.url));
+    });
+  }
+
+  async function copyPostLink(url) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("帖子链接已复制");
+    } catch {
+      window.open(url, "_blank", "noopener");
+      showToast("已在新标签页打开帖子");
+    }
+  }
+
+  async function sharePost(url) {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "X 帖子", url });
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+      }
+    }
+    await copyPostLink(url);
+  }
+
+  function openMoreMenu(button, url) {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    root.querySelector(".tuzai-action-menu")?.remove();
+    const menu = document.createElement("div");
+    menu.className = "tuzai-action-menu";
+    menu.setAttribute("role", "menu");
+    const rect = button.getBoundingClientRect();
+    menu.style.left = `${Math.min(rect.left, window.innerWidth - 210)}px`;
+    menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 112)}px`;
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.setAttribute("role", "menuitem");
+    copy.append(icon("ph-link"), document.createTextNode("复制帖子链接"));
+    copy.addEventListener("click", () => { menu.remove(); copyPostLink(url); });
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.setAttribute("role", "menuitem");
+    open.append(icon("ph-arrow-square-out"), document.createTextNode("在 X 打开更多操作"));
+    open.addEventListener("click", () => { menu.remove(); window.open(url, "_blank", "noopener"); });
+    menu.append(copy, open);
+    root.append(menu);
+  }
+
+  function setComposerTarget(url, label = "原帖") {
+    const root = document.getElementById(ROOT_ID);
+    const composer = root?.querySelector(".tuzai-composer");
+    if (!composer || !url) return;
+    state.activeReplyUrl = url;
+    composer.dataset.targetUrl = url;
+    composer.querySelector(".tuzai-composer-target").textContent = `回复 ${label}`;
+    const input = composer.querySelector("textarea");
+    input.placeholder = `发布你对${label}的回复`;
+    input.focus();
+  }
+
+  async function performPostAction(action, url, button = null, text = "") {
+    if (!state.requestId) {
+      showToast("评论仍在连接，请稍候再试", "error");
+      return null;
+    }
+    if (button) button.setAttribute("aria-busy", "true");
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "TUZAI_ACTION",
+        requestId: state.requestId,
+        url,
+        action,
+        text
+      });
+      if (!response?.ok) throw new Error(response?.error || "X 没有完成这项操作");
+      if (response.article) replaceArticleClone(response.article);
+      showToast(response.message || "已同步到 X");
+      return response;
+    } catch (error) {
+      showToast(error.message || "操作失败，请重试", "error");
+      return null;
+    } finally {
+      button?.removeAttribute("aria-busy");
+    }
+  }
+
+  async function submitReply(composer) {
+    const input = composer.querySelector("textarea");
+    const submit = composer.querySelector("button[data-tuzai-submit-reply]");
+    const text = input.value.trim();
+    const url = composer.dataset.targetUrl || state.sourceUrl;
+    if (!text || !url) return;
+    submit.disabled = true;
+    input.disabled = true;
+    const response = await performPostAction("reply", url, submit, text);
+    input.disabled = false;
+    submit.disabled = false;
+    if (response) {
+      input.value = "";
+      await requestReplies();
+    }
+  }
+
+  function createReplyComposer() {
+    const composer = document.createElement("section");
+    composer.className = "tuzai-composer";
+    composer.dataset.targetUrl = state.sourceUrl || "";
+
+    const profileImage = document.querySelector('a[data-testid="AppTabBar_Profile_Link"] img')?.src;
+    const avatar = profileImage ? document.createElement("img") : icon("ph-user");
+    if (profileImage) {
+      avatar.src = profileImage;
+      avatar.alt = "";
+    }
+    avatar.classList.add("tuzai-composer-avatar");
+
+    const body = document.createElement("div");
+    body.className = "tuzai-composer-body";
+    const target = document.createElement("span");
+    target.className = "tuzai-composer-target";
+    target.textContent = "回复原帖";
+    const input = document.createElement("textarea");
+    input.rows = 2;
+    input.maxLength = 280;
+    input.placeholder = "发布你对原帖的回复";
+    input.setAttribute("aria-label", "发布你的回复");
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.dataset.tuzaiSubmitReply = "true";
+    submit.textContent = "回复";
+    submit.disabled = true;
+    input.addEventListener("input", () => { submit.disabled = !input.value.trim(); });
+    input.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submit.click();
+    });
+    submit.addEventListener("click", () => submitReply(composer));
+    body.append(target, input);
+    composer.append(avatar, body, submit);
+    return composer;
+  }
+
+  async function handleClonedContentClick(event) {
+    const clonedArticle = event.target.closest?.(".tuzai-cloned-article");
+    if (!clonedArticle) return;
+    const action = actionFromTarget(event.target);
     const anchor = event.target.closest?.("a[href]");
+    const url = clonedArticle.dataset.tuzaiPostUrl || clonePostUrl(event.target);
     event.preventDefault();
     event.stopPropagation();
+    if (action && url) {
+      const button = event.target.closest("button");
+      if (action === "reply") {
+        const article = event.target.closest(".tuzai-cloned-article");
+        const label = article?.querySelector('[data-testid="User-Name"]')?.innerText?.split("\n")[0] || "这条帖子";
+        setComposerTarget(url, label);
+      } else if (action === "share") {
+        await sharePost(url);
+      } else if (action === "more") {
+        openMoreMenu(button, url);
+      } else {
+        await performPostAction(action, url, button);
+      }
+      return;
+    }
     if (anchor) window.open(anchor.href, "_blank", "noopener");
   }
 
@@ -93,12 +297,20 @@
     if (!list || !count) return;
     list.replaceChildren();
 
+    if (details.source?.html) {
+      const sourceTemplate = document.createElement("template");
+      sourceTemplate.innerHTML = details.source.html;
+      const sourceArticle = sourceTemplate.content.querySelector('article[data-testid="tweet"]') ?? sourceTemplate.content.firstElementChild;
+      const currentSource = root.querySelector(".tuzai-post-body > .tuzai-cloned-article");
+      if (sourceArticle && currentSource) currentSource.replaceWith(scrubClone(sourceArticle, details.source.url || state.sourceUrl));
+    }
+
     if (kind === "ready") {
       const template = document.createElement("template");
       details.replies.forEach((reply) => {
         template.innerHTML = reply.html;
         const article = template.content.querySelector('article[data-testid="tweet"]') ?? template.content.firstElementChild;
-        if (article) list.append(scrubClone(article));
+        if (article) list.append(scrubClone(article, reply.url));
       });
       count.textContent = String(details.replies.length);
       return;
@@ -140,13 +352,19 @@
     state.requestId = null;
     state.sourceUrl = null;
     state.sourceArticle = null;
+    state.activeReplyUrl = null;
+    window.clearTimeout(state.toastTimer);
   }
 
-  function requestReplies() {
+  async function requestReplies() {
     if (!state.sourceUrl) return;
+    const previousRequestId = state.requestId;
+    if (previousRequestId) {
+      await chrome.runtime.sendMessage({ type: "TUZAI_CANCEL", requestId: previousRequestId }).catch(() => {});
+    }
     state.requestId = crypto.randomUUID();
     setReplyState("loading");
-    chrome.runtime.sendMessage({
+    return chrome.runtime.sendMessage({
       type: "TUZAI_OPEN_POST",
       requestId: state.requestId,
       url: state.sourceUrl
@@ -187,7 +405,7 @@
       </header>
       <div class="tuzai-reader-grid">
         <section class="tuzai-pane tuzai-post-pane">
-          <header class="tuzai-pane-header"><div><strong>原帖</strong><span>内容与媒体</span></div><span class="tuzai-readonly-pill">只读预览</span></header>
+          <header class="tuzai-pane-header"><div><strong>原帖</strong><span>内容、数据与互动</span></div><span class="tuzai-interactive-pill">可直接互动</span></header>
           <div class="tuzai-scroll-area tuzai-post-body"></div>
         </section>
         <section class="tuzai-pane tuzai-replies-pane">
@@ -195,7 +413,8 @@
           <div class="tuzai-scroll-area tuzai-reply-list"></div>
         </section>
       </div>
-      <footer class="tuzai-footer"><span><i class="ph ph-lock-key" aria-hidden="true"></i> 内容仅在浏览器本地处理</span><span>Esc 关闭</span></footer>`;
+      <footer class="tuzai-footer"><span><i class="ph ph-lock-key" aria-hidden="true"></i> 内容本地处理 · 互动同步到当前 X 账号</span><span>Esc 关闭</span></footer>
+      <div class="tuzai-toast" role="status" aria-live="polite" hidden></div>`;
 
     const openOriginal = createIconButton("ph-arrow-square-out", "在 X 详情页打开");
     openOriginal.addEventListener("click", () => window.open(url, "_blank", "noopener"));
@@ -203,9 +422,19 @@
     close.addEventListener("click", closePopover);
     dialog.querySelector(".tuzai-toolbar-actions").append(openOriginal, close);
 
-    const clone = scrubClone(article.cloneNode(true));
+    const clone = scrubClone(article.cloneNode(true), url);
     const postBody = dialog.querySelector(".tuzai-post-body");
-    postBody.append(clone);
+    const contextRow = document.createElement("div");
+    contextRow.className = "tuzai-context-row";
+    const related = document.createElement("span");
+    related.append(document.createTextNode("相关"), icon("ph-caret-down"));
+    const activity = document.createElement("a");
+    activity.href = `${url}/quotes`;
+    activity.target = "_blank";
+    activity.rel = "noopener";
+    activity.append(document.createTextNode("查看动态"), icon("ph-caret-right"));
+    contextRow.append(related, activity);
+    postBody.append(clone, contextRow, createReplyComposer());
     postBody.addEventListener("click", handleClonedContentClick, true);
     dialog.querySelector(".tuzai-reply-list").addEventListener("click", handleClonedContentClick, true);
 
@@ -242,6 +471,9 @@
   async function extractConversation(requestId) {
     try {
       let { column, articles } = await waitForConversation();
+      const initialArticle = articles[0];
+      const source = initialArticle ? { url: findPostUrl(initialArticle), html: initialArticle.outerHTML } : null;
+      const sourceId = Core.postIdFromUrl(source?.url);
       let stableRounds = 0;
       let lastCount = articles.length;
       for (let round = 0; round < 7 && articles.length < MAX_REPLIES + 1 && stableRounds < 2; round += 1) {
@@ -255,11 +487,12 @@
       const items = Core.uniqueByPostId(articles.map((article) => ({
         url: findPostUrl(article),
         html: article.outerHTML
-      }))).slice(1, MAX_REPLIES + 1);
+      }))).filter((item) => Core.postIdFromUrl(item.url) !== sourceId).slice(0, MAX_REPLIES);
 
       await chrome.runtime.sendMessage({
         type: "TUZAI_EXTRACTION_RESULT",
         requestId,
+        source,
         replies: items
       });
     } catch (error) {
@@ -271,22 +504,106 @@
     }
   }
 
+  async function waitForElement(selector, scope = document, timeout = 6000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const element = scope.querySelector(selector);
+      if (element) return element;
+      await delay(120);
+    }
+    throw new Error("等待 X 操作界面超时");
+  }
+
+  function conversationArticles() {
+    const column = document.querySelector('main [data-testid="primaryColumn"]');
+    return column ? [...column.querySelectorAll('article[data-testid="tweet"]')].filter(isTopLevelTweet) : [];
+  }
+
+  async function findArticleForAction(url) {
+    const targetId = Core.postIdFromUrl(url);
+    if (!targetId) throw new Error("无法识别帖子地址");
+
+    window.scrollTo({ top: 0, behavior: "instant" });
+    for (let round = 0; round < 18; round += 1) {
+      await delay(round === 0 ? 250 : 360);
+      const article = conversationArticles().find((candidate) => Core.postIdFromUrl(findPostUrl(candidate)) === targetId);
+      if (article) return article;
+      window.scrollBy({ top: Math.max(520, window.innerHeight * 0.72), behavior: "instant" });
+    }
+    throw new Error("这条帖子已不在当前评论列表，请重新读取后再试");
+  }
+
+  function articlePayload(article) {
+    return { url: findPostUrl(article), html: article.outerHTML };
+  }
+
+  async function performConversationAction(message) {
+    const article = await findArticleForAction(message.url);
+    const selectors = {
+      like: '[data-testid="like"], [data-testid="unlike"]',
+      bookmark: '[data-testid="bookmark"], [data-testid="removeBookmark"]',
+      retweet: '[data-testid="retweet"], [data-testid="unretweet"]'
+    };
+
+    if (message.action === "reply") {
+      const reply = article.querySelector('[data-testid="reply"]');
+      if (!reply) throw new Error("X 没有提供回复入口");
+      reply.click();
+      const dialog = await waitForElement('[role="dialog"]');
+      const editor = await waitForElement('[data-testid="tweetTextarea_0"]', dialog);
+      editor.focus();
+      const inserted = document.execCommand?.("insertText", false, String(message.text || "").slice(0, 280));
+      if (!inserted) {
+        editor.textContent = String(message.text || "").slice(0, 280);
+        editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message.text }));
+      }
+      await delay(240);
+      const submit = await waitForElement('[data-testid="tweetButton"]', dialog);
+      if (submit.getAttribute("aria-disabled") === "true" || submit.disabled) throw new Error("回复内容未被 X 接受");
+      submit.click();
+      await delay(900);
+      return { ok: true, message: "回复已发布到 X" };
+    }
+
+    const selector = selectors[message.action];
+    if (!selector) throw new Error("暂不支持这项操作");
+    const button = article.querySelector(selector);
+    if (!button) throw new Error("X 没有提供这项操作");
+    button.click();
+
+    if (message.action === "retweet") {
+      const confirm = await waitForElement('[data-testid="retweetConfirm"], [data-testid="unretweetConfirm"]');
+      confirm.click();
+    }
+
+    await delay(720);
+    const refreshed = await findArticleForAction(message.url);
+    const labels = { like: "点赞状态已同步", bookmark: "收藏状态已同步", retweet: "转发状态已同步" };
+    return { ok: true, message: labels[message.action], article: articlePayload(refreshed) };
+  }
+
   window.addEventListener("click", handleTimelineClick, true);
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && document.getElementById(ROOT_ID)) closePopover();
   }, true);
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "TUZAI_SET_ENABLED") {
       state.enabled = Boolean(message.enabled);
       if (!state.enabled) closePopover();
     } else if (message?.type === "TUZAI_BEGIN_EXTRACTION") {
       extractConversation(message.requestId);
     } else if (message?.type === "TUZAI_EXTRACTION_RESULT" && message.requestId === state.requestId) {
-      setReplyState(message.replies?.length ? "ready" : "empty", { replies: message.replies ?? [] });
+      setReplyState(message.replies?.length ? "ready" : "empty", { source: message.source, replies: message.replies ?? [] });
     } else if (message?.type === "TUZAI_EXTRACTION_ERROR" && message.requestId === state.requestId) {
       setReplyState("error", { error: message.error });
+    } else if (message?.type === "TUZAI_PERFORM_ACTION") {
+      performConversationAction(message)
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
+      return true;
     }
+    return false;
   });
 
   chrome.storage.sync.get({ enabled: true }).then(({ enabled }) => { state.enabled = enabled; });
