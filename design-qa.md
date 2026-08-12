@@ -1,55 +1,56 @@
-# Design QA — 双 iframe 帖子浮层
+# Design QA — 方案 B 双栏帖子阅读器
 
-- Source visual truth: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-5954910a-33f3-4b63-bdc5-10798a640cd6.png`
-- Implementation screenshot: `D:/GitHub/tuzai-x-popover/docs/preview-double-iframe.png`
-- Combined comparison: `C:/Users/yi/AppData/Local/Temp/tuzai-double-iframe-comparison.png`
-- Browser viewport: 1265 × 712 CSS px
-- Source pixels: 1234 × 1168, density 1
-- Implementation pixels: 1265 × 712, density 1
-- Normalization: the source was cropped to the red-line boundary region and both images were scaled into a 1280 × 390 side-by-side comparison canvas. The source is a single-column boundary reference; the implementation intentionally renders the two resulting regions side by side.
-- State: light theme, reader open, default relevant reply order.
+- 视觉参考：用户提供的 X 帖子详情截图，红线上方为原帖区，红线下方为评论区。
+- 产品预览：`docs/preview.png`
+- 生产实现：Chrome 扩展 0.8.2，使用当前 X 登录会话、动态发现的 GraphQL 操作、本地 HLS 播放和点击帖子 DOM 字段回填。
+- 布局状态：一个浮层，左侧原帖、右侧评论，两栏独立滚动。
 
-## Findings
+## 已确认的产品边界
 
-No actionable P0, P1, or P2 visual differences remain for the agreed split behavior.
+- 不再使用 iframe、隐藏标签页或克隆 X DOM。
+- Content Script 通过事件委托覆盖动态加载的时间线帖子；点击时只提取字符串和媒体 URL 快照，GraphQL 有值时始终以 GraphQL 为准。
+- 原帖和评论从同一次 X `TweetDetail` 数据链路读取，避免左侧先出现、右侧因懒加载竞态一直等待。
+- 左侧保留正文、引用帖、图片/视频、时间、查看数和回复/转帖/喜欢/书签/分享。
+- 右侧保留相关排序入口、查看引用、纯文字回复框、评论列表、嵌套层级和加载更多。
+- 点评论按钮只切换右侧回复目标，不打开第二个 X 原生评论浮层。
+- 写操作限定为喜欢、转帖、书签和 1–280 字纯文字回复；媒体、GIF、投票、草稿和高级回复设置不在本版本范围内。
 
-- The left pane ends with the original post's five-item action row, matching the content above the red line.
-- The right pane starts with `相关 / 查看引用`, followed by the reply composer and replies, matching the content below the red line.
-- The modal remains one visual surface with a single toolbar, central divider, consistent borders, and two independent scroll regions.
-- The `查看引用` wording now follows the current X page instead of the previous incorrect `查看动态` mock label.
+## 视觉检查
 
-## Required fidelity surfaces
+- 浮层在桌面宽度下保持 1180–1500 px 的双栏阅读面，中央分隔线清楚。
+- 左栏操作行与用户提供的五项操作顺序一致，右栏从评论工具区开始。
+- 浅色、暗色和熄灯主题继承 X 页面视觉方向；外层页面在浮层打开期间锁定滚动。
+- 两栏各有独立滚动容器，窄屏下改为上下排列，避免内容被压成不可读的窄列。
+- 加载、空评论、错误、提交中和乐观更新回滚均有独立状态。
 
-- Fonts and typography: system/X-like sans-serif stack, weights, muted metadata, and reply hierarchy remain consistent with the supplied X reference. No text clipping was observed.
-- Spacing and layout rhythm: the red-line boundary maps directly to the center-column split; pane headers, action density, separators, and composer spacing are aligned.
-- Colors and visual tokens: white surface, X foreground/muted colors, blue interaction token, subtle borders, and disabled reply state match the reference family.
-- Image quality and asset fidelity: the supplied兔仔 icon and avatar assets remain raster assets; the implementation does not introduce placeholder imagery or custom-drawn icons.
-- Copy and content: `原帖`, `评论`, `相关`, `查看引用`, reply composer text, and the native-page status copy reflect the agreed behavior.
+## 实机证据
 
-## Interaction evidence
+- 2026-08-12：在已登录的 X 主页点击时间线帖子，浮层保持主页 URL，不跳转详情页。
+- 原帖与评论在约 1 秒内同时完成读取；23 条回复的帖子成功显示评论并提供“加载更多评论”。
+- 另一条含引用帖和视频的帖子成功显示原帖、引用内容、互动数和多条评论。
+- 旧版“左侧出现、右侧一直读取评论”的隐藏标签页竞态未复现。
+- 2026-08-13：截图确认原图标字体在 X 页面内加载失败；0.7.1 改为构建时抽取 Phosphor 官方 SVG 并随内容脚本注入。
+- 2026-08-13：截图与用户播放反馈确认固定最高码率 MP4 明显卡于 X 原生自适应播放器；0.7.1 改为连接感知的中码率变体、按需拉流和单视频播放。
+- 2026-08-13：实机对照确认 X 原页面把 EvoLink.ai 帖子作为视频播放，而插件因严格匹配 MP4 MIME/码率把它降级成封面图；0.7.2 放宽视频变体识别，并为 HLS-only 媒体显示明确的“在 X 播放”入口。
+- 2026-08-13：0.8.0 将 `hls.js` 和 Apache-2.0 许可证本地打包，优先播放 X HLS 自适应流，限制前向/后向缓冲；MP4 保留为连接感知回退。
+- 2026-08-13：0.8.0 新增点击帖子 DOM 快照，在 GraphQL 缺少作者、头像、时间或媒体类型时补齐；不移动、克隆或修改 X 的 React DOM。
+- 2026-08-13：在当前 X 时间线只读核对 `User-Name`、`tweetText`、`Tweet-User-Avatar`、`tweetPhoto` 和 `videoPlayer`；普通媒体能进入回填，引用帖容器内媒体会被排除，避免重复显示。
+- 2026-08-13：用户截图中的 Midori 金鱼内容实机确认已经渲染为带 X MP4 地址的 `<video>`，并非图片；0.8.1 拆除“引用帖整卡 `<a>` 包播放器”的无效嵌套，新增居中播放按钮，避免 poster 封面看起来像普通图片。
+- 2026-08-13：实机测得浮层打开后 `body/html overflow:hidden` 使 X 页面 `scrollY` 归零；0.8.2 不再修改页面滚动容器，改为浮层内部阻止滚动穿透，并双帧恢复打开前坐标。
+- 2026-08-13：实机测得引用视频内容约 498px 高、紧凑外框固定 300px 且裁切；0.8.2 对单个视频使用媒体真实宽高比并取消紧凑高度上限。
+- 未执行真实点赞、转帖、书签或回复，避免代表用户产生外部操作；相应操作通过代码路径、权限边界和自动测试验证。
 
-- Reply sort menu opened and closed with `Escape`.
-- Closing the reader removed the dialog; reopening restored it.
-- Left- and right-pane scroll areas accepted independent scrolling without moving the outer page.
-- Browser console warnings/errors checked: none.
-- Build and automated tests: 9/9 passed.
+## 自动检查
 
-## Comparison history
+- `npm test`：16/16 通过。
+- `npm run build:extension`：通过，产物为 `dist-extension/`。
+- `git diff --check`：通过。
+- Manifest 仅保留 `storage` 权限和 X/Twitter 两个站点权限，不使用 `tabs`、cookies、DNR 或后台脚本。
+- 页面会话认证信息只保存在 X 页面内存，不写入扩展存储，也不经过第三方服务器。
 
-### Iteration 1
+## 剩余实机回归
 
-- Earlier P1: the previous architecture cloned X DOM and proxied interactions through a hidden tab.
-- Fix: replaced extraction and action proxy code with two same-post X iframes inside one modal.
-- Earlier P1: the preview displayed `查看动态`, while the current X page uses `查看引用` for this context.
-- Fix: changed the visible preview label and delegated production wording/functionality to X's native DOM.
-- Post-fix evidence: `docs/preview-double-iframe.png` and the combined comparison above.
+- 重新加载 0.8.2 后，需在 X 实机确认关闭浮层后仍位于原帖、引用视频完整显示，以及居中播放按钮和 HLS/MP4 播放。
+- 真实写操作仍应由用户本人首次触发并确认结果；若 X 后续更换 mutation 名称，界面会显示失败并回滚本地状态。
 
-## Residual runtime validation
-
-The visual implementation passes. Loading the unpacked extension into the user's Chrome and exercising the live X iframe DOM still requires the browser's extension-install confirmation; this is a runtime integration check rather than an unresolved visual mismatch.
-
-## Follow-up polish
-
-- P3: after live installation, tune X DOM isolation selectors if the user's current account receives a different experiment layout.
-
-final result: passed
+final result: pending 0.8.2 live regression

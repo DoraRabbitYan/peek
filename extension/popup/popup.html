@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>兔仔帖子浮层</title>
-    <link rel="stylesheet" href="../vendor/phosphor/style.css">
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
@@ -19,11 +18,12 @@
         <span class="toggle" aria-hidden="true"></span>
       </label>
       <section class="privacy-note">
-        <i class="ph ph-shield-check" aria-hidden="true"></i>
+        <span data-phosphor-icon="shield-check" aria-hidden="true"></span>
         <p>只在 X 页面内加载 X 原生内容；不读取 Cookie，不把帖子发送到第三方服务器。</p>
       </section>
       <footer id="status">已开启</footer>
     </main>
+    <script src="../vendor/phosphor/icons.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

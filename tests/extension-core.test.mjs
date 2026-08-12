@@ -29,26 +29,244 @@ test("selects the source author's status link instead of a quoted status", () =>
   assert.equal(Core.postIdFromUrl("https://x.com/author/status/200/photo/1"), "200");
 });
 
+test("parses focal post, nested replies, media and the bottom cursor", () => {
+  const user = (id, name, screenName) => ({
+    rest_id: id,
+    is_blue_verified: true,
+    legacy: { name, screen_name: screenName, profile_image_url_https: `https://img.example/${id}_normal.jpg` }
+  });
+  const tweet = (id, author, text, parent = "", extra = {}) => ({
+    rest_id: id,
+    core: { user_results: { result: author } },
+    views: { count: "1234" },
+    legacy: {
+      id_str: id,
+      full_text: text,
+      created_at: "Tue Aug 12 12:00:00 +0000 2026",
+      conversation_id_str: "100",
+      in_reply_to_status_id_str: parent,
+      reply_count: 2,
+      retweet_count: 3,
+      favorite_count: 4,
+      bookmark_count: 5,
+      entities: { urls: [], user_mentions: [], hashtags: [] },
+      ...extra
+    }
+  });
+  const focal = tweet("100", user("u1", "作者", "author"), "原帖");
+  const firstReply = tweet("101", user("u2", "甲", "one"), "一级评论", "100", {
+    extended_entities: {
+      media: [{
+        id_str: "m1",
+        type: "video",
+        media_url_https: "https://img.example/poster.jpg",
+        video_info: { variants: [
+          { content_type: "video/mp4", bitrate: 256000, url: "https://video.example/low.mp4" },
+          { content_type: "video/mp4", bitrate: 832000, url: "https://video.example/medium.mp4" },
+          { content_type: "video/mp4", bitrate: 2176000, url: "https://video.example/high.mp4" }
+        ] }
+      }]
+    }
+  });
+  const nestedReply = tweet("102", user("u3", "乙", "two"), "二级评论", "101");
+  const json = {
+    data: {
+      threaded_conversation_with_injections_v2: {
+        instructions: [{ entries: [
+          { entryId: "tweet-100", content: { itemContent: { tweet_results: { result: focal } } } },
+          { entryId: "conversationthread-101", content: { items: [
+            { item: { itemContent: { tweet_results: { result: firstReply } } } },
+            { item: { itemContent: { tweet_results: { result: nestedReply } } } }
+          ] } },
+          { entryId: "cursor-bottom", content: { cursorType: "Bottom", value: "cursor-next" } }
+        ] }]
+      }
+    }
+  };
+  const parsed = Core.parseTweetDetail(json, "100");
+  assert.equal(parsed.focal.id, "100");
+  assert.equal(parsed.focal.author.handle, "author");
+  assert.equal(parsed.focal.counts.views, 1234);
+  assert.equal(parsed.replies.length, 2);
+  assert.equal(parsed.replies[0].media[0].videoUrl, "https://video.example/medium.mp4");
+  assert.equal(Core.selectVideoVariant(parsed.replies[0].media[0].videoVariants, 500000).url, "https://video.example/low.mp4");
+  assert.equal(parsed.replies[1].depth, 1);
+  assert.equal(parsed.cursor, "cursor-next");
+});
+
+test("keeps current X video variants when the MIME type has parameters or bitrate is absent", () => {
+  const result = Core.tweetModel({
+    rest_id: "150",
+    legacy: {
+      id_str: "150",
+      full_text: "视频帖",
+      conversation_id_str: "150",
+      entities: { urls: [], user_mentions: [], hashtags: [] },
+      extended_entities: {
+        media: [{
+          id_str: "video-150",
+          type: "photo",
+          media_url_https: "https://img.example/video-poster.jpg",
+          video_info: {
+            variants: [
+              { content_type: "application/x-mpegURL", url: "https://video.example/master.m3u8" },
+              { content_type: "video/mp4; codecs=avc1.4d001f", url: "https://video.example/fallback.mp4" }
+            ]
+          }
+        }]
+      }
+    }
+  });
+
+  assert.equal(result.media[0].type, "video");
+  assert.equal(result.media[0].videoUrl, "https://video.example/fallback.mp4");
+  assert.equal(result.media[0].videoVariants[0].bitrate, 0);
+  assert.equal(result.media[0].hlsUrl, "https://video.example/master.m3u8");
+});
+
+test("preserves an HLS-only item as video instead of silently treating its poster as a photo", () => {
+  const result = Core.tweetModel({
+    rest_id: "151",
+    legacy: {
+      id_str: "151",
+      full_text: "HLS 视频帖",
+      conversation_id_str: "151",
+      entities: { urls: [], user_mentions: [], hashtags: [] },
+      extended_entities: {
+        media: [{
+          media_key: "video-151",
+          type: "video",
+          media_url_https: "https://img.example/hls-poster.jpg",
+          video_info: { variants: [{ content_type: "application/vnd.apple.mpegurl", url: "https://video.example/only.m3u8" }] }
+        }]
+      }
+    }
+  });
+
+  assert.equal(result.media[0].type, "video");
+  assert.equal(result.media[0].videoUrl, "");
+  assert.equal(result.media[0].hlsUrl, "https://video.example/only.m3u8");
+});
+
+test("parses the current X user shape when legacy profile fields are absent", () => {
+  const modernUser = {
+    __typename: "User",
+    core: { name: "新版作者", screen_name: "modern_author" },
+    avatar: { image_url: "https://img.example/u-modern_normal.jpg" },
+    verification: { is_blue_verified: true }
+  };
+  const result = Core.tweetModel({
+    rest_id: "200",
+    core: { user_results: { result: modernUser } },
+    legacy: {
+      id_str: "200",
+      full_text: "新版用户结构",
+      conversation_id_str: "200",
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    }
+  });
+
+  assert.equal(result.author.name, "新版作者");
+  assert.equal(result.author.handle, "modern_author");
+  assert.equal(result.author.avatar, "https://img.example/u-modern_200x200.jpg");
+  assert.equal(result.author.verified, true);
+});
+
+test("fills only missing author and media fields from the clicked X DOM snapshot", () => {
+  const merged = Core.mergeModelFallback({
+    id: "300",
+    url: "https://x.com/source/status/300",
+    text: "GraphQL 正文",
+    createdAt: "",
+    author: { id: "", name: "X 用户", handle: "", avatar: "", verified: false },
+    media: [{ type: "photo", url: "https://img.example/poster.jpg", videoUrl: "", videoVariants: [], hlsUrl: "", expandedUrl: "" }]
+  }, {
+    id: "300",
+    url: "https://x.com/source/status/300",
+    text: "DOM 正文",
+    createdAt: "2026-08-13T01:00:00.000Z",
+    author: { id: "", name: "真实作者", handle: "source", avatar: "https://img.example/source.jpg", verified: true },
+    media: [{ type: "video", url: "https://img.example/dom-poster.jpg", videoUrl: "", videoVariants: [], hlsUrl: "", expandedUrl: "https://x.com/source/status/300" }]
+  });
+
+  assert.equal(merged.text, "GraphQL 正文");
+  assert.equal(merged.createdAt, "2026-08-13T01:00:00.000Z");
+  assert.equal(merged.author.name, "真实作者");
+  assert.equal(merged.author.handle, "source");
+  assert.equal(merged.author.avatar, "https://img.example/source.jpg");
+  assert.equal(merged.author.verified, true);
+  assert.equal(merged.media[0].type, "video");
+  assert.equal(merged.media[0].url, "https://img.example/poster.jpg");
+  assert.equal(merged.media[0].expandedUrl, "https://x.com/source/status/300");
+});
+
 test("manifest keeps permissions limited to local state and X hosts", async () => {
   const manifest = JSON.parse(await readFile(path.resolve("extension/manifest.json"), "utf8"));
-  assert.deepEqual([...manifest.permissions].sort(), ["storage"]);
+  assert.deepEqual(manifest.permissions, ["storage"]);
   assert.deepEqual(manifest.host_permissions, ["https://x.com/*", "https://twitter.com/*"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
-  assert.equal(manifest.content_scripts[0].all_frames, true);
+  assert.equal(JSON.stringify(manifest).includes("tabs"), false);
+  assert.equal(JSON.stringify(manifest).includes("declarativeNetRequest"), false);
+  assert.deepEqual(manifest.content_scripts[0].js, ["page-bridge.js"]);
+  assert.equal(manifest.content_scripts[0].world, "MAIN");
+  assert.equal(manifest.content_scripts[0].run_at, "document_start");
+  assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
+  assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
   assert.equal(manifest.background, undefined);
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.8.2");
 });
 
-test("reader uses two native X frames without clone or proxy code", async () => {
+test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {
   const content = await readFile(path.resolve("extension/content.js"), "utf8");
-  assert.match(content, /createNativeFrame\(url, "source"/);
-  assert.match(content, /createNativeFrame\(url, "replies"/);
-  assert.match(content, /tuzaiPane/);
-  assert.match(content, /DISCOVER_LABELS/);
-  assert.match(content, /window\.top !== window\.self/);
+  const bridge = await readFile(path.resolve("extension/page-bridge.js"), "utf8");
+  assert.match(content, /READ_THREAD/);
+  assert.match(content, /CREATE_REPLY/);
+  assert.match(content, /TOGGLE_ACTION/);
+  assert.match(content, /preload = "none"/);
+  assert.match(content, /selectVideoVariant/);
+  assert.match(content, /snapshotArticle/);
+  assert.match(content, /HlsPlayer/);
+  assert.match(content, /hls-adaptive/);
+  assert.match(content, /tuzai-video-play/);
+  assert.match(content, /pageScrollY = window\.scrollY/);
+  assert.match(content, /window\.scrollTo\(pageScrollX, pageScrollY\)/);
+  assert.match(content, /tuzai-media-single-video/);
+  assert.match(content, /item\.style\.aspectRatio/);
+  assert.match(content, /const quote = element\("section", "tuzai-quote-card"\)/);
+  assert.doesNotMatch(content, /const quote = element\("a", "tuzai-quote-card"\)/);
+  assert.doesNotMatch(content, /document\.body\.style\.overflow\s*=\s*"hidden"/);
+  assert.doesNotMatch(content, /document\.documentElement\.style\.overflow\s*=\s*"hidden"/);
+  assert.match(bridge, /TweetDetail/);
+  assert.match(bridge, /FavoriteTweet/);
+  assert.match(bridge, /CreateRetweet/);
+  assert.match(bridge, /CreateBookmark/);
+  assert.match(bridge, /CreateTweet/);
+  assert.match(bridge, /webpackChunk/);
+  assert.match(bridge, /x-client-transaction-id/);
+  assert.doesNotMatch(content, /<iframe|createNativeFrame|tuzaiPane/);
   assert.doesNotMatch(content, /cloneNode/);
   assert.doesNotMatch(content, /TUZAI_OPEN_POST/);
   assert.doesNotMatch(content, /TUZAI_PERFORM_ACTION/);
-  assert.doesNotMatch(content, /fetch\(/);
+  assert.doesNotMatch(bridge, /Bearer A{5,}/);
+  assert.doesNotMatch(bridge, /chrome\.storage/);
+});
+
+test("extension build embeds official Phosphor SVG paths without a web font", async () => {
+  const manifest = JSON.parse(await readFile(path.resolve("dist-extension/manifest.json"), "utf8"));
+  const icons = await readFile(path.resolve("dist-extension/vendor/phosphor/icons.js"), "utf8");
+  assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
+  assert.equal(JSON.stringify(manifest).includes("Phosphor.woff"), false);
+  assert.match(icons, /chat-circle/);
+  assert.match(icons, /shield-check/);
+  assert.match(icons, /<path/);
+});
+
+test("extension build bundles hls.js locally before the reader content script", async () => {
+  const manifest = JSON.parse(await readFile(path.resolve("dist-extension/manifest.json"), "utf8"));
+  const hls = await readFile(path.resolve("dist-extension/vendor/hls/hls.min.js"), "utf8");
+  const license = await readFile(path.resolve("dist-extension/vendor/hls/LICENSE"), "utf8");
+  assert.equal(manifest.content_scripts[1].js[1], "vendor/hls/hls.min.js");
+  assert.match(hls, /Hls/);
+  assert.match(license, /Apache License/);
 });

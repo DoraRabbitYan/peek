@@ -13,10 +13,17 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - This repository ships a Manifest V3 Chrome extension for `x.com` and `twitter.com` plus a Vite-based visual demo.
 - The core interaction keeps the X timeline in place and opens a modal reader: original post on the left, replies on the right.
 - The original-post action bar must preserve X's native five-item order and density: reply, repost, like, bookmark, share. Do not insert analytics into that row.
-- The modal contains two same-post X iframes inside one visual container. The left iframe shows the original post through its native five-action row; the right iframe starts with X's native reply controls and continues through the reply list. Each iframe scrolls independently.
-- Do not clone X posts, extract replies, proxy actions through a hidden tab, or recreate X sorting/reply controls. The extension only isolates the relevant regions of X's own page.
-- Hide `发现更多 / Discover more` and all recommendation cells after that boundary from the right reply pane.
-- The iframe content script must only activate for frames created by the extension (`data-tuzai-pane=source|replies`) and must never open a nested兔仔浮层.
-- It uses no third-party backend, requests only `storage` and X/Twitter host access, and must not request cookie, tabs, or all-sites access.
-- Native X interactions remain inside their corresponding iframe. X reply dialogs and menus may open inside that pane; `Esc` closes native overlays first, then the outer reader.
+- The reader uses X's currently loaded internal GraphQL operation definitions and the current signed-in browser session. A small MAIN-world bridge captures only the request metadata required to call X; credentials and CSRF values must never be persisted, logged, or sent outside X.
+- The left pane renders the focal post; the right pane renders reply sorting, a pure-text reply composer, nested replies, and cursor-based loading. Each pane scrolls independently.
+- Version 0.8 supports like/unlike, repost/unrepost, bookmark/unbookmark, share/copy link, pure-text replies, locally bundled HLS playback, and clicked-post DOM field fallback. Rich replies with media, GIFs, polls, drafts, or advanced mention completion remain in X's full composer.
+- Extension UI icons are generated at build time from official Phosphor regular SVG assets and injected inline. Do not reintroduce a page-loaded icon font, remote icon CDN, mixed icon families, or hand-drawn replacement paths.
+- Prefer X's HLS playlist through a locally bundled `hls.js` player with short adaptive buffers; fall back to a connection-aware progressive MP4 below the bitrate target. Keep `preload="none"` behavior for MP4 and coordinate a single playing video. Do not load a remote player script, default to X's highest MP4 bitrate, or preload every reply video.
+- The delegated Content Script click listener may snapshot strings and media URLs from the clicked tweet to fill missing GraphQL author, avatar, timestamp, or media fields. GraphQL remains authoritative; never move, clone, retain, or mutate X's live React DOM nodes.
+- Video inside a quoted post must not be nested in the quote navigation anchor. Keep quote navigation on its own link and give every playable video an explicit central play control in addition to native controls.
+- Opening the reader must not mutate `body` or `html` overflow because X's virtual timeline can reset its scroll position. Keep scroll containment inside the fixed overlay, record the page coordinates before opening, and restore them after closing.
+- A single video, including video inside a quote, must use its real media aspect ratio and may grow vertically inside the independently scrollable pane. Do not clip it with the compact quote-media height cap.
+- Do not use iframes, hidden tabs, copied live DOM, DNR response-header rewriting, a third-party backend, hard-coded GraphQL query IDs, or persisted X credentials.
+- Discover X GraphQL `queryId`, feature switches, field toggles, and transaction-ID helpers from the currently loaded X Webpack runtime, with captured TweetDetail replay only as a read fallback.
+- It requests only `storage` and X/Twitter host access. It must not request cookie, tabs, DNR, webRequest, or all-sites access.
+- `Esc` closes the reader while X navigation, external links, and the full composer remain explicit user actions.
 - The unpacked extension output is `dist-extension/`; the demo remains Sites-compatible and builds to `dist/client/`.

@@ -17,13 +17,41 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 cpSync(source, dist, { recursive: true });
 
-const phosphorDir = path.join(root, "node_modules", "@phosphor-icons", "web", "src", "regular");
 const vendorDir = path.join(dist, "vendor", "phosphor");
 mkdirSync(vendorDir, { recursive: true });
-cpSync(path.join(phosphorDir, "Phosphor.woff2"), path.join(vendorDir, "Phosphor.woff2"));
-let phosphorCss = readFileSync(path.join(phosphorDir, "style.css"), "utf8");
-phosphorCss = phosphorCss.replaceAll("./Phosphor.woff2", "./Phosphor.woff2");
-writeFileSync(path.join(vendorDir, "style.css"), phosphorCss);
+
+const hlsVendorDir = path.join(dist, "vendor", "hls");
+const hlsSource = path.join(root, "node_modules", "hls.js", "dist", "hls.min.js");
+const hlsLicense = path.join(root, "node_modules", "hls.js", "LICENSE");
+if (!existsSync(hlsSource) || !existsSync(hlsLicense)) throw new Error("Missing local hls.js dependency");
+mkdirSync(hlsVendorDir, { recursive: true });
+cpSync(hlsSource, path.join(hlsVendorDir, "hls.min.js"));
+cpSync(hlsLicense, path.join(hlsVendorDir, "LICENSE"));
+
+const iconSources = [
+  path.join(source, "content.js"),
+  path.join(source, "popup", "popup.html")
+];
+const iconNames = [...new Set(iconSources.flatMap((file) => {
+  const contents = readFileSync(file, "utf8");
+  return [
+    ...[...contents.matchAll(/ph-([a-z0-9-]+)/g)].map((match) => match[1]),
+    ...[...contents.matchAll(/data-phosphor-icon=["']([a-z0-9-]+)["']/g)].map((match) => match[1])
+  ];
+}))].sort();
+const phosphorAssets = path.join(root, "node_modules", "@phosphor-icons", "core", "assets", "regular");
+const iconPaths = Object.fromEntries(iconNames.map((name) => {
+  const file = path.join(phosphorAssets, `${name}.svg`);
+  if (!existsSync(file)) throw new Error(`Missing Phosphor icon: ${name}`);
+  const svg = readFileSync(file, "utf8");
+  const body = svg.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i)?.[1]?.trim();
+  if (!body) throw new Error(`Invalid Phosphor SVG: ${name}`);
+  return [name, body];
+}));
+writeFileSync(
+  path.join(vendorDir, "icons.js"),
+  `globalThis.TuzaiPhosphorIcons = Object.freeze(${JSON.stringify(iconPaths)});\n`
+);
 
 const iconDir = path.join(dist, "icons");
 mkdirSync(iconDir, { recursive: true });

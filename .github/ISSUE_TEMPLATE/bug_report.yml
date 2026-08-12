@@ -1,0 +1,48 @@
+name: Bug 报告
+description: 报告可复现的扩展问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交 Cookie、授权请求头、CSRF 值或其他账号凭据。
+  - type: input
+    id: version
+    attributes:
+      label: 扩展版本
+      placeholder: 例如 0.8.2
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与版本
+      placeholder: 例如 Chrome 140
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请说明从哪个页面、点击什么内容后出现问题。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为与截图
+      description: 截图请遮挡无关个人信息。
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: 控制台错误（可选）
+      render: shell

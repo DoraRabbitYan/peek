@@ -15,6 +15,7 @@ input:checked + .toggle { background: #1d9bf0; }
 input:checked + .toggle::after { transform: translateX(18px); }
 input:focus-visible + .toggle { outline: 2px solid #1d9bf0; outline-offset: 2px; }
 .privacy-note { display: flex; gap: 9px; margin-top: 12px; padding: 12px 13px; border-radius: 12px; background: #eaf6fd; color: #30556d; }
-.privacy-note i { margin-top: 2px; font-size: 20px; }
+.tuzai-icon { width: 1em; height: 1em; display: block; flex: 0 0 auto; fill: currentColor; }
+.privacy-note .tuzai-icon { margin-top: 2px; font-size: 20px; }
 .privacy-note p { margin: 0; font-size: 12px; line-height: 1.5; }
 footer { padding: 13px 2px 0; color: #536471; font-size: 12px; text-align: center; }

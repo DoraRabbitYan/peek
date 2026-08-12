@@ -230,13 +230,13 @@ export function App() {
             </header>
             <div className="tuzai-reader-grid">
               <section className="tuzai-pane tuzai-post-pane">
-                <header className="tuzai-pane-header"><div><strong>原帖</strong><span>X 原生内容与互动</span></div><span className="tuzai-interactive-pill">原生页面</span></header>
+                <header className="tuzai-pane-header"><div><strong>原帖</strong><span>内容与基础互动</span></div><span className="tuzai-interactive-pill">独立滚动</span></header>
                 <div className="tuzai-scroll-area tuzai-post-body">
                   <MockPost metrics={metrics} onAction={handlePostAction} />
                 </div>
               </section>
               <section className="tuzai-pane tuzai-replies-pane">
-                <header className="tuzai-pane-header"><div><strong>评论</strong><span>X 原生排序、回复与讨论</span></div><span className="tuzai-interactive-pill">独立滚动</span></header>
+                <header className="tuzai-pane-header"><div><strong>评论</strong><span>按 X 默认顺序</span></div><span className="tuzai-interactive-pill">独立滚动</span></header>
                 <div className="tuzai-reply-tools">
                   <div className="tuzai-context-row">
                     <div className="tuzai-sort-control">
@@ -258,7 +258,7 @@ export function App() {
                 </div>
               </section>
             </div>
-            <footer className="tuzai-footer"><span><i className="ph ph-lock-key" /> 两栏均由当前登录的 X 原生页面提供</span><span>Esc 关闭</span></footer>
+            <footer className="tuzai-footer"><span><i className="ph ph-lock-key" /> 数据与操作直接使用当前登录的 X 会话，不经过第三方服务器</span><span>Esc 关闭</span></footer>
             {toast && <div className="tuzai-toast" role="status">{toast}</div>}
           </section>
         </div>
