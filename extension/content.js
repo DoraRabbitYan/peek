@@ -410,6 +410,7 @@
         </section>
         <section class="tuzai-pane tuzai-replies-pane">
           <header class="tuzai-pane-header"><div><strong>评论</strong><span>按 X 当前默认顺序</span></div><span class="tuzai-reply-count">—</span></header>
+          <div class="tuzai-reply-tools"></div>
           <div class="tuzai-scroll-area tuzai-reply-list"></div>
         </section>
       </div>
@@ -434,7 +435,8 @@
     activity.rel = "noopener";
     activity.append(document.createTextNode("查看动态"), icon("ph-caret-right"));
     contextRow.append(related, activity);
-    postBody.append(clone, contextRow, createReplyComposer());
+    postBody.append(clone);
+    dialog.querySelector(".tuzai-reply-tools").append(contextRow, createReplyComposer());
     postBody.addEventListener("click", handleClonedContentClick, true);
     dialog.querySelector(".tuzai-reply-list").addEventListener("click", handleClonedContentClick, true);
 

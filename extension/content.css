@@ -37,6 +37,7 @@
 .tuzai-reader-grid { min-height: 0; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(390px, .92fr); }
 .tuzai-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: 58px minmax(0, 1fr); }
 .tuzai-post-pane { border-right: 1px solid var(--tuzai-border); }
+.tuzai-replies-pane { grid-template-rows: 58px auto minmax(0, 1fr); }
 .tuzai-pane-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 20px; border-bottom: 1px solid var(--tuzai-border); background: color-mix(in srgb, var(--tuzai-bg) 95%, var(--tuzai-soft)); }
 .tuzai-pane-header > div { display: grid; gap: 2px; }
 .tuzai-pane-header strong { font-size: 16px; }
@@ -50,17 +51,19 @@
 .tuzai-cloned-article button[data-tuzai-action] { cursor: pointer !important; }
 .tuzai-cloned-article button[data-tuzai-action][aria-busy="true"] { opacity: .46; pointer-events: none; }
 .tuzai-reply-list > .tuzai-cloned-article { width: 100%; border-bottom: 1px solid var(--tuzai-border) !important; }
-.tuzai-context-row { display: flex; align-items: center; justify-content: space-between; min-height: 50px; padding: 0 24px; border-top: 1px solid var(--tuzai-border); border-bottom: 1px solid var(--tuzai-border); color: var(--tuzai-muted); font-weight: 650; }
+.tuzai-context-row { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 28px 0 6px; border-top: 1px solid var(--tuzai-border); border-bottom: 1px solid var(--tuzai-border); color: var(--tuzai-muted); font-weight: 650; }
 .tuzai-context-row > span, .tuzai-context-row > a { display: inline-flex; align-items: center; gap: 4px; color: inherit; text-decoration: none; }
 .tuzai-context-row > a:hover { text-decoration: underline; }
-.tuzai-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 18px 22px; border-bottom: 1px solid var(--tuzai-border); background: var(--tuzai-bg); }
-.tuzai-composer-avatar { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; background: var(--tuzai-soft); color: var(--tuzai-muted); font-size: 22px; }
-.tuzai-composer-body { min-width: 0; display: grid; gap: 5px; }
-.tuzai-composer-target { color: var(--tuzai-accent); font-size: 12px; font-weight: 650; }
-.tuzai-composer textarea { width: 100%; min-height: 48px; max-height: 124px; resize: vertical; border: 0; outline: 0; padding: 2px 0; background: transparent; color: var(--tuzai-fg); font: inherit; font-size: 18px; line-height: 1.4; }
+.tuzai-composer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 14px 28px 14px 6px; border-bottom: 1px solid var(--tuzai-border); background: var(--tuzai-bg); }
+.tuzai-composer-avatar { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; background: var(--tuzai-soft); color: var(--tuzai-muted); font-size: 21px; }
+.tuzai-composer-body { min-width: 0; display: grid; }
+.tuzai-composer-target { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tuzai-composer textarea { width: 100%; min-height: 44px; max-height: 112px; resize: vertical; border: 0; outline: 0; padding: 8px 0 0; background: transparent; color: var(--tuzai-fg); font: inherit; font-size: 19px; line-height: 1.35; }
 .tuzai-composer textarea::placeholder { color: var(--tuzai-muted); }
-.tuzai-composer > button { border: 0; border-radius: 999px; padding: 10px 18px; background: var(--tuzai-accent); color: #fff; font-weight: 750; cursor: pointer; }
+.tuzai-composer > button { border: 0; border-radius: 999px; padding: 8px 18px; background: var(--tuzai-accent); color: #fff; font-weight: 750; cursor: pointer; }
 .tuzai-composer > button:disabled { background: color-mix(in srgb, var(--tuzai-muted) 38%, var(--tuzai-bg)); cursor: default; }
+.tuzai-reply-tools { min-width: 0; background: var(--tuzai-bg); }
+.tuzai-reply-tools .tuzai-context-row { border-top: 0; }
 .tuzai-action-menu { position: fixed; z-index: 2147483647; width: 204px; overflow: hidden; border: 1px solid var(--tuzai-border); border-radius: 14px; background: var(--tuzai-bg); box-shadow: 0 12px 36px rgba(15,20,25,.22); }
 .tuzai-action-menu button { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; padding: 12px 14px; background: transparent; color: var(--tuzai-fg); text-align: left; font-weight: 650; cursor: pointer; }
 .tuzai-action-menu button:hover { background: var(--tuzai-soft); }

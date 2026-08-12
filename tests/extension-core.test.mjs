@@ -46,7 +46,7 @@ test("manifest keeps permissions limited to local state, tabs, and X hosts", asy
   assert.deepEqual(manifest.host_permissions, ["https://x.com/*", "https://twitter.com/*"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
-  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.version, "0.3.0");
 });
 
 test("interactive proxy keeps account actions local to X", async () => {
@@ -57,6 +57,8 @@ test("interactive proxy keeps account actions local to X", async () => {
   assert.match(content, /TUZAI_PERFORM_ACTION/);
   assert.match(content, /tweetButton/);
   assert.match(content, /可直接互动/);
+  assert.match(content, /querySelector\("\.tuzai-reply-tools"\)\.append\(contextRow, createReplyComposer\(\)\)/);
+  assert.doesNotMatch(content, /postBody\.append\(contextRow/);
   assert.match(background, /TUZAI_ACTION/);
   assert.doesNotMatch(content, /fetch\(/);
   assert.doesNotMatch(background, /fetch\(/);

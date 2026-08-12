@@ -1,56 +1,50 @@
 # Design QA
 
-- Source visual truth: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-b7a3db9e-6771-4ec8-b378-1968a2eb9e23.png`
-- Implementation screenshot: `D:/GitHub/tuzai-x-popover/docs/preview.png`
-- State: light theme, popover open, replies loaded, native-equivalent action row and reply composer visible
-- Source pixels: 1256 × 842 at unknown CSS density
-- Implementation pixels / observed CSS viewport: 1265 × 712 at the in-app browser's default desktop density
-- Density normalization: both captures were inspected together at their native near-equal widths. The supplied source is already a focused crop of the X action/composer area, so an additional crop was not needed.
+- Source visual truth 1: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-e9d5980e-e913-4636-a2c6-bbf40760d530.png`
+- Source visual truth 2: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-7d869374-3ae4-4c08-bbe7-ebef608974b8.png`
+- Full implementation screenshot: `D:/GitHub/tuzai-x-popover/docs/preview.png`
+- Focused action comparison: `D:/GitHub/tuzai-x-popover/docs/qa-action-bar-normalized-verified.png`
+- Focused right-tools comparison: `D:/GitHub/tuzai-x-popover/docs/qa-right-reply-tools-normalized-verified.png`
+- State: light theme, desktop two-column popover open, replies loaded
+- Source pixels: 1182 × 94 and 1196 × 266
+- Implementation viewport: 1265 × 712
 
 ## Findings
 
-No actionable P0/P1/P2 visual or interaction mismatch remains for the requested feature set.
+No actionable P0/P1/P2 mismatch remains for the two requested regions.
 
-The source establishes the required interaction anatomy: reply, repost, like, view/analytics, bookmark, share, related ordering, quote activity, reply composer, and per-reply action rows. The implementation visibly preserves those surfaces while adapting them to the intentional two-column reader.
+The original-post action bar now has exactly five controls in the source order: reply, repost, like, bookmark, share. The proportional icon positions match the reference, only reply and like show their initial counts, and the share control uses the same upward-arrow anatomy.
 
-## Full-view comparison evidence
-
-- The left pane keeps the original post and X-like action hierarchy, then shows `相关`, `查看动态`, and the reply composer in the same order as the source.
-- The right pane keeps per-reply reply, like, view/analytics, and share controls instead of reducing replies to plain text.
-- The two-column split is an intentional product change required by the original brief, not a fidelity regression. Independent scrolling preserves the source's dense conversation-reading behavior.
+`相关`, `查看动态`, and the reply composer now live at the top of the right comment pane. The source avatar crop is used, the helper target label is visually hidden, and the disabled reply button, left/right insets, row heights, separators, and muted colors follow the supplied crop.
 
 ## Focused comparison evidence
 
-The source image itself is a focused 1256 px-wide crop of the interaction region. At the implementation's comparable 1265 px width, all corresponding controls and labels remain legible. The action row, `相关` / `查看动态` row, disabled-empty reply button, and reply cards were directly readable in the combined image inspection, so no additional crop was necessary.
-
-## Required fidelity surfaces
-
-- Fonts and typography: system UI fonts, X-like muted metadata, strong author names, and compact action counts preserve the source hierarchy. No wrapping or truncation failure was observed.
-- Spacing and layout rhythm: the action row, context row, composer, and comment separators align consistently. The left pane uses slightly denser spacing than the source so the controls fit beside the comment pane; this is acceptable for the split-reader layout.
-- Colors and visual tokens: white surface, near-black copy, muted gray metadata, neutral borders, and blue interactive state remain consistent with X light mode.
-- Image quality and assets: the extension keeps real X avatars/media in live cloned articles and uses the generated rabbit icon only for plugin branding. Standard controls use the bundled Phosphor icon library.
-- Copy and content: `可直接互动` replaces the misleading former `只读预览`; the footer now states that content is processed locally while interactions sync to the current X account.
+- Both source crops and both implementation crops were inspected together in the same comparison input.
+- The action bar preserves the five-item spacing ratios across a responsive pane rather than inserting an analytics control.
+- The right-tools block preserves the source hierarchy: context row, divider, avatar/placeholder/button composer, divider.
+- DOM placement audit: left context/composer count `0`; right context/composer count `1` each.
 
 ## Interaction and browser checks
 
-- Original-post like, repost, and bookmark controls toggled counts from `128/16/31` to `129/17/32` in the demo.
-- Clicking a reply's reply button changed the composer target to `回复若水`.
-- Publishing a reply increased the visible reply count from 3 to 4 and inserted the new reply at the top.
-- Reply likes, share feedback, the more-actions feedback, and analytics feedback were verified.
-- `Escape` changed the dialog count from 1 to 0; reopening changed it back to 1.
-- Loading, empty, error, and ready states remain available through the demo state selector.
+- Original action count text changed from `2 / 1` to `2 / 1 / 2` after activating repost and like; repost, like, and bookmark active states all became true.
+- Clicking the original reply action focused the composer in the right pane.
+- Clicking `回复 若水` changed the placeholder to `发布你对若水的回复`.
+- Publishing a reply increased the visible reply count from `3` to `4` and inserted the new reply at the top.
+- Share produced `帖子链接已复制`.
+- `Escape` reduced the dialog count from `1` to `0`; `重新打开浮层` restored it to `1`.
 - Fresh-tab browser console warnings/errors: none.
-- Local preview URL tested: `http://127.0.0.1:55090/`.
+- Local preview tested: `http://127.0.0.1:55090/`.
+- Automated checks: 10/10 tests passed; extension content script syntax check and `git diff --check` passed.
 
 ## Comparison history
 
-1. P1 from the previous version: cloned X controls were disabled and the header explicitly said `只读预览`. Fixed by keeping the inactive X detail tab alive as an interaction proxy, enabling action buttons, adding a real reply composer, and changing the header to `可直接互动`.
-2. P2 in the first interactive demo pass: reply like counts rendered as `NaN`. Fixed by normalizing the optional liked state to a boolean before calculating the count.
-3. P2 in the second pass: overlapping toast timers could clear newer feedback. Fixed by storing and cancelling the previous timer before showing a new toast.
-4. Post-fix evidence: all requested controls are visible, the browser interaction sequence passes, and a fresh-tab console check is clean.
+1. P1: the previous preview placed `相关`, `查看动态`, and the composer under the left original post. Fixed by moving the complete block to `.tuzai-reply-tools` above the right reply list.
+2. P1: the previous original-post bar used the wrong item set and spacing. Fixed with the exact five controls and source-measured proportional insets.
+3. P2: the first focused QA crop used incorrect screenshot coordinates. Fixed by reading the live component bounds and cropping the verified full screenshot.
+4. Post-fix evidence: combined source/implementation comparison passes, all requested interactions pass, and a fresh-tab console check is clean.
 
 ## Residual test gap
 
-The unpacked extension has not been installed into the user's Chrome, so no real X account write was executed during QA. Current X DOM selectors for reply, repost, like, bookmark, share, analytics, quote activity, and the inline reply editor were inspected against the user's signed-in X page, and the proxy code is covered by syntax/build/unit checks. Installing the extension remains a separate confirmation-gated step.
+The unpacked extension has not been installed into the user's Chrome, so no real X account write was executed during QA. Installing the extension remains a separate confirmation-gated step.
 
 final result: passed

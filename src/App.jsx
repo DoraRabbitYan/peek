@@ -66,12 +66,11 @@ function MockPost({ metrics, onAction }) {
         <p>好的阅读工具，应该尽量减少用户在上下文之间来回搬家。</p>
       </div>
       <div className="demo-metrics">
-        <Action icon="ph-chat-circle" label="回复" onClick={() => onAction("reply")}>23</Action>
-        <Action icon="ph-arrows-clockwise" label="转发" active={metrics.reposted} onClick={() => onAction("retweet")}>{16 + Number(metrics.reposted)}</Action>
-        <Action icon="ph-heart" label="喜欢" active={metrics.liked} onClick={() => onAction("like")}>{128 + Number(metrics.liked)}</Action>
-        <Action icon="ph-chart-bar" label="查看帖子分析" onClick={() => onAction("analytics")}>67</Action>
-        <Action icon="ph-bookmark-simple" label="加入书签" active={metrics.bookmarked} onClick={() => onAction("bookmark")}>{31 + Number(metrics.bookmarked)}</Action>
-        <Action icon="ph-share-fat" label="分享帖子" onClick={() => onAction("share")} />
+        <Action icon="ph-chat-circle" label="回复" onClick={() => onAction("reply")}>2</Action>
+        <Action icon="ph-arrows-clockwise" label="转发" active={metrics.reposted} onClick={() => onAction("retweet")}>{metrics.reposted ? 1 : null}</Action>
+        <Action icon="ph-heart" label="喜欢" active={metrics.liked} onClick={() => onAction("like")}>{1 + Number(metrics.liked)}</Action>
+        <Action icon="ph-bookmark-simple" label="加入书签" active={metrics.bookmarked} onClick={() => onAction("bookmark")} />
+        <Action icon="ph-upload-simple" label="分享帖子" onClick={() => onAction("share")} />
       </div>
     </article>
   );
@@ -225,16 +224,18 @@ export function App() {
                 <header className="tuzai-pane-header"><div><strong>原帖</strong><span>内容、数据与互动</span></div><span className="tuzai-interactive-pill">可直接互动</span></header>
                 <div className="tuzai-scroll-area tuzai-post-body">
                   <MockPost metrics={metrics} onAction={handlePostAction} />
-                  <div className="tuzai-context-row"><span>相关 <i className="ph ph-caret-down" /></span><a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看动态 <i className="ph ph-caret-right" /></a></div>
-                  <section className="tuzai-composer" data-target-url="https://x.com/tuzai_lab/status/2087155564904370681">
-                    <Avatar />
-                    <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea rows="2" maxLength="280" value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /></div>
-                    <button type="button" disabled={!replyText.trim()} onClick={publishReply}>回复</button>
-                  </section>
                 </div>
               </section>
               <section className="tuzai-pane tuzai-replies-pane">
                 <header className="tuzai-pane-header"><div><strong>评论</strong><span>{state === 'ready' ? '按 X 默认顺序' : '读取当前会话可见内容'}</span></div><span className="tuzai-reply-count">{state === 'ready' ? replyItems.length : '—'}</span></header>
+                <div className="tuzai-reply-tools">
+                  <div className="tuzai-context-row"><span>相关 <i className="ph ph-caret-down" /></span><a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看动态 <i className="ph ph-caret-right" /></a></div>
+                  <section className="tuzai-composer" data-target-url="https://x.com/tuzai_lab/status/2087155564904370681">
+                    <img className="tuzai-composer-avatar" src="/assets/tino-avatar.png" alt="" />
+                    <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea rows="2" maxLength="280" value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /></div>
+                    <button type="button" disabled={!replyText.trim()} onClick={publishReply}>回复</button>
+                  </section>
+                </div>
                 <div className="tuzai-scroll-area tuzai-reply-list">
                   {state === "ready" && replyItems.map((reply) => <Reply reply={reply} onAction={handleReplyAction} key={`${reply.handle}-${reply.time}`} />)}
                   {state === "loading" && <div className="tuzai-state"><span className="tuzai-spinner" /><strong>正在读取评论</strong><p>原帖已经可以阅读，评论加载完成后会自动出现。</p></div>}
