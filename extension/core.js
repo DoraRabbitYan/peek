@@ -24,6 +24,10 @@
     return normalized ? normalized.match(/\/status\/(\d+)$/)?.[1] ?? null : null;
   }
 
+  function isPostDetailUrl(href, baseUrl = "https://x.com/") {
+    return Boolean(normalizePostUrl(href, baseUrl));
+  }
+
   function profileHandle(profileHref) {
     return String(profileHref || "").match(PROFILE_PATTERN)?.[1]?.toLowerCase() || null;
   }
@@ -195,6 +199,217 @@
     }).filter((item) => item.url || item.videoUrl || item.hlsUrl);
   }
 
+  function bindingValueMap(card) {
+    const values = card?.legacy?.binding_values || card?.binding_values || {};
+    if (Array.isArray(values)) {
+      return Object.fromEntries(values
+        .filter((item) => item?.key)
+        .map((item) => [item.key, item.value || {}]));
+    }
+    return objectValue(values) || {};
+  }
+
+  function bindingString(bindings, ...keys) {
+    for (const key of keys) {
+      const value = bindings[key];
+      const text = value?.string_value ?? value?.stringValue ?? (typeof value === "string" ? value : "");
+      if (text) return String(text);
+    }
+    return "";
+  }
+
+  function bindingImage(bindings, ...keys) {
+    for (const key of keys) {
+      const value = bindings[key]?.image_value || bindings[key]?.imageValue || bindings[key];
+      const url = value?.url || value?.image_url || value?.imageUrl || "";
+      if (!url) continue;
+      return {
+        url: String(url),
+        width: numberValue(value?.width),
+        height: numberValue(value?.height)
+      };
+    }
+    return null;
+  }
+
+  function findNamedValue(root, names, maxDepth = 7) {
+    const wanted = new Set(names);
+    const seen = new Set();
+    function visit(value, depth) {
+      if (!value || typeof value !== "object" || seen.has(value) || depth > maxDepth) return null;
+      seen.add(value);
+      for (const [key, child] of Object.entries(value)) {
+        if (wanted.has(key) && child !== null && child !== undefined && child !== "") return child;
+      }
+      for (const child of Object.values(value)) {
+        const found = visit(child, depth + 1);
+        if (found !== null) return found;
+      }
+      return null;
+    }
+    return visit(root, 0);
+  }
+
+  function articleResult(tweet) {
+    let current = objectValue(tweet?.article?.article_results?.result)
+      || objectValue(tweet?.article?.result)
+      || objectValue(tweet?.article_results?.result)
+      || objectValue(tweet?.article);
+    for (let index = 0; current && index < 5; index += 1) {
+      if (current.title || current.preview_text || current.cover_media || current.cover_image) return current;
+      if (objectValue(current.result)) current = current.result;
+      else if (objectValue(current.article)) current = current.article;
+      else break;
+    }
+    return current;
+  }
+
+  function articleContent(article) {
+    const contentState = objectValue(article?.content_state)
+      || objectValue(article?.contentState)
+      || objectValue(findNamedValue(article, ["content_state", "contentState"], 5));
+    const rawBlocks = Array.isArray(contentState?.blocks) ? contentState.blocks : [];
+    const rawEntityMap = objectValue(contentState?.entityMap)
+      || objectValue(contentState?.entity_map)
+      || objectValue(contentState?.entities)
+      || {};
+
+    const entities = Object.fromEntries(Object.entries(rawEntityMap).map(([key, value]) => {
+      const data = objectValue(value?.data) || objectValue(value) || {};
+      return [String(key), {
+        type: String(value?.type || data?.type || ""),
+        url: String(findNamedValue(data, ["expanded_url", "url", "href"], 4) || ""),
+        image: String(findNamedValue(data, ["media_url_https", "original_img_url", "image_url", "src"], 5) || ""),
+        width: numberValue(findNamedValue(data, ["original_img_width", "width"], 5)),
+        height: numberValue(findNamedValue(data, ["original_img_height", "height"], 5)),
+        alt: String(findNamedValue(data, ["alt_text", "alt", "description"], 4) || "")
+      }];
+    }));
+
+    const blocks = rawBlocks.map((block, index) => ({
+      key: String(block?.key || index),
+      type: String(block?.type || "unstyled"),
+      text: String(block?.text || ""),
+      depth: numberValue(block?.depth),
+      inlineStyles: (Array.isArray(block?.inlineStyleRanges) ? block.inlineStyleRanges : []).map((range) => ({
+        offset: numberValue(range?.offset),
+        length: numberValue(range?.length),
+        style: String(range?.style || "")
+      })).filter((range) => range.length > 0 && range.style),
+      entityRanges: (Array.isArray(block?.entityRanges) ? block.entityRanges : []).map((range) => ({
+        offset: numberValue(range?.offset),
+        length: numberValue(range?.length),
+        key: String(range?.key ?? "")
+      })).filter((range) => range.length > 0 && range.key)
+    }));
+
+    const plainText = String(article?.plain_text || article?.plainText || "");
+    if (!blocks.length && plainText) {
+      for (const [index, text] of plainText.split(/\n{2,}/).entries()) {
+        if (text.trim()) blocks.push({ key: `plain-${index}`, type: "unstyled", text: text.trim(), depth: 0, inlineStyles: [], entityRanges: [] });
+      }
+    }
+    return blocks.length ? { blocks, entities } : null;
+  }
+
+  function firstEntityUrl(legacy, predicate = () => true) {
+    const item = (legacy?.entities?.urls || []).find((entry) => {
+      const url = String(entry?.expanded_url || entry?.url || "");
+      return url && predicate(url, entry);
+    });
+    return item ? String(item.expanded_url || item.url || "") : "";
+  }
+
+  function domainFromUrl(value) {
+    try {
+      return new URL(value).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function richAttachment(legacy, tweet) {
+    const article = articleResult(tweet);
+    const articleUrl = firstEntityUrl(legacy, (url) => /(?:x|twitter)\.com\/i\/article\//i.test(url));
+    if (article || articleUrl) {
+      const cover = objectValue(findNamedValue(article, ["cover_media", "cover_image", "preview_image"])) || article;
+      const image = String(findNamedValue(cover, ["original_img_url", "media_url_https", "image_url", "url"], 5) || "");
+      return {
+        type: "article",
+        url: articleUrl || String(findNamedValue(article, ["article_url", "url"], 4) || ""),
+        sourceUrl: String(legacy?.entities?.urls?.find((entry) => /(?:x|twitter)\.com\/i\/article\//i.test(String(entry?.expanded_url || "")))?.url || ""),
+        domain: "x.com",
+        title: String(findNamedValue(article, ["title"], 4) || ""),
+        description: String(findNamedValue(article, ["preview_text", "description", "summary"], 5) || ""),
+        image,
+        imageWidth: numberValue(findNamedValue(cover, ["original_img_width", "width"], 5)),
+        imageHeight: numberValue(findNamedValue(cover, ["original_img_height", "height"], 5)),
+        content: articleContent(article)
+      };
+    }
+
+    const card = objectValue(tweet?.card);
+    if (!card) return null;
+    const bindings = bindingValueMap(card);
+    const sourceUrl = String(card?.legacy?.url || card?.url || bindingString(bindings, "card_url") || "");
+    const expandedUrl = firstEntityUrl(legacy, (_url, entry) => !sourceUrl || entry?.url === sourceUrl)
+      || bindingString(bindings, "vanity_url", "card_url")
+      || sourceUrl;
+    const image = bindingImage(bindings,
+      "summary_photo_image_original",
+      "player_image_original",
+      "thumbnail_image_original",
+      "photo_image_full_size_original",
+      "thumbnail_image",
+      "photo_image_full_size");
+    const title = bindingString(bindings, "title");
+    const description = bindingString(bindings, "description");
+    const domain = bindingString(bindings, "domain") || domainFromUrl(expandedUrl);
+    if (!title && !description && !image?.url) return null;
+    return {
+      type: "website",
+      url: expandedUrl,
+      sourceUrl,
+      domain,
+      title,
+      description,
+      image: image?.url || "",
+      imageWidth: image?.width || 0,
+      imageHeight: image?.height || 0
+    };
+  }
+
+  function articleAttachmentFromPayload(value) {
+    const seen = new Set();
+    let article = null;
+    function visit(node, depth = 0) {
+      if (article || !node || typeof node !== "object" || seen.has(node) || depth > 12) return;
+      seen.add(node);
+      const candidate = articleResult(node);
+      if (candidate?.content_state?.blocks?.length || candidate?.plain_text) {
+        article = candidate;
+        return;
+      }
+      if (Array.isArray(node)) node.forEach((child) => visit(child, depth + 1));
+      else for (const child of Object.values(node)) visit(child, depth + 1);
+    }
+    visit(value);
+    if (!article) return null;
+    const cover = objectValue(findNamedValue(article, ["cover_media", "cover_image", "preview_image"])) || article;
+    return {
+      type: "article",
+      url: String(findNamedValue(article, ["article_url", "url"], 4) || ""),
+      sourceUrl: "",
+      domain: "x.com",
+      title: String(findNamedValue(article, ["title"], 4) || ""),
+      description: String(findNamedValue(article, ["preview_text", "description", "summary"], 5) || ""),
+      image: String(findNamedValue(cover, ["original_img_url", "media_url_https", "image_url", "url"], 5) || ""),
+      imageWidth: numberValue(findNamedValue(cover, ["original_img_width", "width"], 5)),
+      imageHeight: numberValue(findNamedValue(cover, ["original_img_height", "height"], 5)),
+      content: articleContent(article)
+    };
+  }
+
   function tweetModel(value, depth = 0) {
     const tweet = unwrapResult(value);
     if (!tweet) return null;
@@ -237,6 +452,7 @@
         bookmarked: Boolean(legacy.bookmarked)
       },
       media: mediaItems(legacy, tweet),
+      attachment: richAttachment(legacy, tweet),
       quote: quoted
     };
   }
@@ -268,6 +484,22 @@
         };
       })
       : fallbackMedia;
+    const attachment = model.attachment && fallback.attachment
+      ? {
+        ...fallback.attachment,
+        ...model.attachment,
+        type: model.attachment.type || fallback.attachment.type,
+        url: model.attachment.url || fallback.attachment.url || model.url || "",
+        sourceUrl: model.attachment.sourceUrl || fallback.attachment.sourceUrl || "",
+        domain: model.attachment.domain || fallback.attachment.domain || "",
+        title: model.attachment.title || fallback.attachment.title || "",
+        description: model.attachment.description || fallback.attachment.description || "",
+        image: model.attachment.image || fallback.attachment.image || "",
+        imageWidth: model.attachment.imageWidth || fallback.attachment.imageWidth || 0,
+        imageHeight: model.attachment.imageHeight || fallback.attachment.imageHeight || 0,
+        content: model.attachment.content || fallback.attachment.content || null
+      }
+      : model.attachment || fallback.attachment || null;
     return {
       ...model,
       text: model.text || fallback.text || "",
@@ -279,7 +511,8 @@
         avatar: author.avatar || fallbackAuthor.avatar || "",
         verified: Boolean(author.verified || fallbackAuthor.verified)
       },
-      media
+      media,
+      attachment
     };
   }
 
@@ -291,7 +524,7 @@
     function visit(node) {
       if (!node || typeof node !== "object" || seenNodes.has(node)) return;
       seenNodes.add(node);
-      const result = node.tweet_results?.result;
+      const result = node.tweet_results?.result || node.tweetResult?.result;
       if (result) {
         const model = tweetModel(result);
         if (model?.id && !seenTweets.has(model.id)) {
@@ -336,6 +569,22 @@
     const byId = new Map(models.map((model) => [model.id, model]));
     const focal = byId.get(focalId) || null;
 
+    const ancestors = [];
+    if (focal) {
+      const visited = new Set([focalId]);
+      let parentId = focal.inReplyToId;
+      while (parentId && byId.has(parentId) && !visited.has(parentId)) {
+        visited.add(parentId);
+        const parent = byId.get(parentId);
+        ancestors.unshift(parent);
+        parentId = parent.inReplyToId;
+      }
+      const conversationRoot = byId.get(focal.conversationId);
+      if (conversationRoot && conversationRoot.id !== focalId && !ancestors.some((model) => model.id === conversationRoot.id)) {
+        ancestors.unshift(conversationRoot);
+      }
+    }
+
     function descendsFromFocal(model) {
       if (!focal || !model || model.id === focalId) return false;
       if (model.inReplyToId === focalId) return true;
@@ -362,18 +611,20 @@
       reply.depth = Math.min(depth, 3);
     }
 
-    return { focal, replies, cursor: bottomCursor(json) };
+    return { focal, ancestors, replies, cursor: bottomCursor(json) };
   }
 
   root.TuzaiCore = Object.freeze({
     normalizePostUrl,
     postIdFromUrl,
+    isPostDetailUrl,
     profileHandle,
     selectOwnPostUrl,
     selectVideoVariant,
     tweetModel,
     mergeModelFallback,
     collectTweetModels,
+    articleAttachmentFromPayload,
     parseTweetDetail
   });
 })(typeof globalThis === "object" ? globalThis : self);

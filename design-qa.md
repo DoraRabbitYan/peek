@@ -1,56 +1,47 @@
-# Design QA — 方案 B 双栏帖子阅读器
+# Design QA
 
-- 视觉参考：用户提供的 X 帖子详情截图，红线上方为原帖区，红线下方为评论区。
-- 产品预览：`docs/preview.png`
-- 生产实现：Chrome 扩展 0.8.2，使用当前 X 登录会话、动态发现的 GraphQL 操作、本地 HLS 播放和点击帖子 DOM 字段回填。
-- 布局状态：一个浮层，左侧原帖、右侧评论，两栏独立滚动。
+- Source visual truth: `C:/Users/yi/AppData/Local/Temp/codex-clipboard-54688d7c-1711-455b-a161-7480b3c01348.png`
+- Implementation screenshot: unavailable until the unpacked extension is reloaded in Chrome
+- Viewport: source 2048 x 1152 px; implementation target is the same desktop X overlay state
+- State: X Article opened from a timeline plus its right-side reply list
 
-## 已确认的产品边界
+## Full-view comparison evidence
 
-- 不再使用 iframe、隐藏标签页或克隆 X DOM。
-- Content Script 通过事件委托覆盖动态加载的时间线帖子；点击时只提取字符串和媒体 URL 快照，GraphQL 有值时始终以 GraphQL 为准。
-- 原帖和评论从同一次 X `TweetDetail` 数据链路读取，避免左侧先出现、右侧因懒加载竞态一直等待。
-- 左侧保留正文、引用帖、图片/视频、时间、查看数和回复/转帖/喜欢/书签/分享。
-- 右侧保留相关排序入口、查看引用、纯文字回复框、评论列表、嵌套层级和加载更多。
-- 点评论按钮只切换右侧回复目标，不打开第二个 X 原生评论浮层。
-- 写操作限定为喜欢、转帖、书签和 1–280 字纯文字回复；媒体、GIF、投票、草稿和高级回复设置不在本版本范围内。
+The source clearly shows the current defect: the left pane stops at an Article preview card rather than continuing into the Article body, and the right pane has no locally-created reply pinned at the beginning of the list. The implementation now changes both data and rendering paths, but the live extension cannot reflect those files until Chrome reloads the unpacked extension and refreshes X.
 
-## 视觉检查
+## Focused region comparison evidence
 
-- 浮层在桌面宽度下保持 1180–1500 px 的双栏阅读面，中央分隔线清楚。
-- 左栏操作行与用户提供的五项操作顺序一致，右栏从评论工具区开始。
-- 浅色、暗色和熄灯主题继承 X 页面视觉方向；外层页面在浮层打开期间锁定滚动。
-- 两栏各有独立滚动容器，窄屏下改为上下排列，避免内容被压成不可读的窄列。
-- 加载、空评论、错误、提交中和乐观更新回滚均有独立状态。
+- Left pane: the source has cover, title and preview inside one bordered card. The new renderer uses the same cover asset, then renders the hydrated Article title and complete rich-text blocks as normal reading content.
+- Right pane: the new-reply path records the created tweet ID, sorts those local replies before the server order, and resets the reply pane to scroll position 0 after successful publication.
 
-## 实机证据
+## Required fidelity surfaces
 
-- 2026-08-12：在已登录的 X 主页点击时间线帖子，浮层保持主页 URL，不跳转详情页。
-- 原帖与评论在约 1 秒内同时完成读取；23 条回复的帖子成功显示评论并提供“加载更多评论”。
-- 另一条含引用帖和视频的帖子成功显示原帖、引用内容、互动数和多条评论。
-- 旧版“左侧出现、右侧一直读取评论”的隐藏标签页竞态未复现。
-- 2026-08-13：截图确认原图标字体在 X 页面内加载失败；0.7.1 改为构建时抽取 Phosphor 官方 SVG 并随内容脚本注入。
-- 2026-08-13：截图与用户播放反馈确认固定最高码率 MP4 明显卡于 X 原生自适应播放器；0.7.1 改为连接感知的中码率变体、按需拉流和单视频播放。
-- 2026-08-13：实机对照确认 X 原页面把 EvoLink.ai 帖子作为视频播放，而插件因严格匹配 MP4 MIME/码率把它降级成封面图；0.7.2 放宽视频变体识别，并为 HLS-only 媒体显示明确的“在 X 播放”入口。
-- 2026-08-13：0.8.0 将 `hls.js` 和 Apache-2.0 许可证本地打包，优先播放 X HLS 自适应流，限制前向/后向缓冲；MP4 保留为连接感知回退。
-- 2026-08-13：0.8.0 新增点击帖子 DOM 快照，在 GraphQL 缺少作者、头像、时间或媒体类型时补齐；不移动、克隆或修改 X 的 React DOM。
-- 2026-08-13：在当前 X 时间线只读核对 `User-Name`、`tweetText`、`Tweet-User-Avatar`、`tweetPhoto` 和 `videoPlayer`；普通媒体能进入回填，引用帖容器内媒体会被排除，避免重复显示。
-- 2026-08-13：用户截图中的 Midori 金鱼内容实机确认已经渲染为带 X MP4 地址的 `<video>`，并非图片；0.8.1 拆除“引用帖整卡 `<a>` 包播放器”的无效嵌套，新增居中播放按钮，避免 poster 封面看起来像普通图片。
-- 2026-08-13：实机测得浮层打开后 `body/html overflow:hidden` 使 X 页面 `scrollY` 归零；0.8.2 不再修改页面滚动容器，改为浮层内部阻止滚动穿透，并双帧恢复打开前坐标。
-- 2026-08-13：实机测得引用视频内容约 498px 高、紧凑外框固定 300px 且裁切；0.8.2 对单个视频使用媒体真实宽高比并取消紧凑高度上限。
-- 未执行真实点赞、转帖、书签或回复，避免代表用户产生外部操作；相应操作通过代码路径、权限边界和自动测试验证。
+- Fonts and typography: article hierarchy uses the existing extension/system typography and explicit heading/body sizes; live browser verification is pending.
+- Spacing and layout rhythm: article content remains inside the existing independently scrollable left pane; live long-article rhythm and overflow need verification.
+- Colors and visual tokens: only existing extension color tokens are used.
+- Image quality and asset fidelity: the X-provided Article cover and inline images are reused directly; no placeholder or generated asset is introduced.
+- Copy and content: the implementation requests `article.content_state` and renders every returned text block rather than repeating the preview description.
 
-## 自动检查
+## Findings
 
-- `npm test`：16/16 通过。
-- `npm run build:extension`：通过，产物为 `dist-extension/`。
-- `git diff --check`：通过。
-- Manifest 仅保留 `storage` 权限和 X/Twitter 两个站点权限，不使用 `tabs`、cookies、DNR 或后台脚本。
-- 页面会话认证信息只保存在 X 页面内存，不写入扩展存储，也不经过第三方服务器。
+- [P1] Live visual comparison is blocked until the unpacked extension is reloaded.
+  - Location: Chrome X timeline overlay.
+  - Evidence: Chrome is still running the previously loaded extension code; extension content scripts do not hot-reload from disk.
+  - Impact: the complete Article body and pinned reply cannot yet be captured in their final browser state.
+  - Fix: reload the unpacked extension, refresh X, open the same Article post, and capture the overlay at the same viewport.
 
-## 剩余实机回归
+## Comparison history
 
-- 重新加载 0.8.2 后，需在 X 实机确认关闭浮层后仍位于原帖、引用视频完整显示，以及居中播放按钮和 HLS/MP4 播放。
-- 真实写操作仍应由用户本人首次触发并确认结果；若 X 后续更换 mutation 名称，界面会显示失败并回滚本地状态。
+- Initial source finding: Article content appeared only as a preview card; a newly-published reply was appended below the loaded list.
+- Fixes made: added dynamic `TweetResultByRestId` hydration, complete rich-text Article rendering, local reply pinning, and automatic top scroll.
+- Post-fix visual evidence: pending extension reload.
 
-final result: pending 0.8.2 live regression
+## Implementation checklist
+
+- Reload `dist-extension/` in Chrome.
+- Refresh the X tab and open the same Article post from a list page.
+- Confirm the full body is present and independently scrollable.
+- Publish one pure-text reply and confirm it appears at the top without manual scrolling.
+- Capture the implementation and rerun visual comparison.
+
+final result: blocked

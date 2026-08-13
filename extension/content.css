@@ -174,6 +174,49 @@
 }
 
 .tuzai-post-card { min-height: 100%; padding: 24px 28px 18px; background: var(--tuzai-bg); }
+.tuzai-thread-context { min-height: 100%; background: var(--tuzai-bg); }
+.tuzai-thread-ancestor {
+  position: relative;
+  min-width: 0;
+  padding: 20px 28px 10px;
+  background: var(--tuzai-bg);
+}
+.tuzai-thread-ancestor::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 70px;
+  bottom: -20px;
+  left: 50px;
+  width: 2px;
+  background: var(--tuzai-border);
+}
+.tuzai-thread-ancestor > * { position: relative; z-index: 1; }
+.tuzai-thread-text {
+  margin: 8px 0 4px 57px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.tuzai-thread-ancestor > .tuzai-media-grid,
+.tuzai-thread-ancestor > .tuzai-attachment-card,
+.tuzai-thread-ancestor > .tuzai-quote-card { margin-left: 57px; }
+.tuzai-thread-ancestor > .tuzai-actions-compact { margin-left: 57px; }
+.tuzai-thread-context > .tuzai-post-card {
+  position: relative;
+  min-height: 0;
+  border-top: 1px solid var(--tuzai-border);
+}
+.tuzai-thread-context > .tuzai-post-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50px;
+  width: 2px;
+  height: 24px;
+  background: var(--tuzai-border);
+}
 .tuzai-author-line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; }
 .tuzai-avatar-link { display: block; color: inherit; text-decoration: none; }
 .tuzai-avatar {
@@ -288,6 +331,100 @@
 .tuzai-media-compact.tuzai-media-single-video { min-height: 0; max-height: none; }
 .tuzai-media-single-video .tuzai-media-item { min-height: 0; }
 .tuzai-media-single-video .tuzai-media-item video { min-height: 0; max-height: none; object-fit: contain; }
+
+.tuzai-attachment-card {
+  display: block;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--tuzai-border);
+  border-radius: 18px;
+  background: var(--tuzai-bg);
+  color: var(--tuzai-fg);
+  text-decoration: none;
+}
+.tuzai-attachment-card:hover { background: color-mix(in srgb, var(--tuzai-soft) 55%, transparent); }
+.tuzai-attachment-media {
+  position: relative;
+  width: 100%;
+  min-height: 170px;
+  max-height: 470px;
+  overflow: hidden;
+  background: var(--tuzai-soft);
+}
+.tuzai-attachment-media img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.tuzai-attachment-website .tuzai-attachment-media { aspect-ratio: 2 / 1; }
+.tuzai-attachment-website .tuzai-attachment-media img { object-fit: contain; }
+.tuzai-article-badge {
+  position: absolute;
+  left: 18px;
+  bottom: 16px;
+  border-radius: 5px;
+  padding: 5px 10px;
+  background: rgb(0 0 0 / 86%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1;
+}
+.tuzai-attachment-body { display: grid; gap: 6px; padding: 18px 20px 20px; }
+.tuzai-attachment-title { font-size: 20px; line-height: 1.3; }
+.tuzai-attachment-description {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--tuzai-fg);
+  font-size: 16px;
+  line-height: 1.45;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+.tuzai-attachment-source {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-top: 1px solid var(--tuzai-border);
+  color: var(--tuzai-muted);
+  font-size: 14px;
+}
+.tuzai-attachment-source .tuzai-icon { width: 16px; height: 16px; }
+.tuzai-attachment-compact { margin-top: 10px; border-radius: 14px; }
+.tuzai-attachment-compact .tuzai-attachment-media { min-height: 120px; max-height: 280px; }
+.tuzai-attachment-compact .tuzai-attachment-body { padding: 12px 14px 14px; }
+.tuzai-attachment-compact .tuzai-attachment-title { font-size: 16px; }
+.tuzai-attachment-compact .tuzai-attachment-description { font-size: 14px; -webkit-line-clamp: 3; }
+.tuzai-attachment-compact .tuzai-article-badge { left: 12px; bottom: 11px; }
+
+.tuzai-article-reader { margin-top: 18px; }
+.tuzai-article-cover {
+  position: relative;
+  width: 100%;
+  max-height: 560px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--tuzai-soft);
+}
+.tuzai-article-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tuzai-article-heading { display: grid; gap: 10px; padding: 24px 4px 8px; }
+.tuzai-article-heading h1 { margin: 0; font-size: 30px; line-height: 1.25; letter-spacing: -0.02em; }
+.tuzai-article-open { display: inline-flex; width: fit-content; align-items: center; gap: 6px; color: var(--tuzai-accent); font-size: 14px; text-decoration: none; }
+.tuzai-article-open .tuzai-icon { width: 17px; height: 17px; }
+.tuzai-article-content { padding: 4px 4px 12px; color: var(--tuzai-fg); font-size: 18px; line-height: 1.78; }
+.tuzai-article-content h2,
+.tuzai-article-content h3,
+.tuzai-article-content h4 { margin: 34px 0 12px; line-height: 1.35; letter-spacing: -0.015em; }
+.tuzai-article-content h2 { font-size: 25px; }
+.tuzai-article-content h3 { font-size: 22px; }
+.tuzai-article-content h4 { font-size: 19px; }
+.tuzai-article-content p { margin: 0 0 18px; white-space: pre-wrap; }
+.tuzai-article-content blockquote { margin: 22px 0; padding: 2px 0 2px 18px; border-left: 4px solid var(--tuzai-border); color: var(--tuzai-muted); }
+.tuzai-article-content ul,
+.tuzai-article-content ol { margin: 0 0 18px; padding-left: 30px; }
+.tuzai-article-content a { color: var(--tuzai-accent); }
+.tuzai-article-content figure { margin: 24px 0; }
+.tuzai-article-content figure img { display: block; max-width: 100%; height: auto; border-radius: 16px; }
 
 .tuzai-quote-card {
   display: block;
@@ -481,6 +618,7 @@
 .tuzai-reply-card .tuzai-author-secondary { flex: 1 1 auto; }
 .tuzai-reply-text { margin: 7px 0 4px 51px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.5; }
 .tuzai-reply-card > .tuzai-reply-body > .tuzai-media-grid,
+.tuzai-reply-card > .tuzai-reply-body > .tuzai-attachment-card,
 .tuzai-reply-card > .tuzai-reply-body > .tuzai-quote-card { margin-left: 51px; }
 .tuzai-actions-compact { min-height: 38px; margin: 4px 0 0 42px; border: 0; }
 .tuzai-actions-compact .tuzai-action { min-height: 34px; justify-content: flex-start; }

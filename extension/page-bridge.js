@@ -327,6 +327,15 @@
     }
   }
 
+  function readArticle(tweetId) {
+    return graphql("TweetResultByRestId", {
+      tweetId,
+      withCommunity: false,
+      includePromotedContent: false,
+      withVoice: false
+    }, "GET");
+  }
+
   async function toggleAction(action, tweetId, active) {
     const mapping = ACTIONS[action];
     if (!mapping) throw new Error("不支持的互动操作");
@@ -365,6 +374,7 @@
     try {
       let payload;
       if (message.type === "READ_THREAD") payload = await readThread(tweetId, message.cursor);
+      else if (message.type === "READ_ARTICLE") payload = await readArticle(tweetId);
       else if (message.type === "TOGGLE_ACTION") payload = await toggleAction(message.action, tweetId, Boolean(message.active));
       else if (message.type === "CREATE_REPLY") payload = await createReply(tweetId, message.text);
       else throw new Error("未知请求");

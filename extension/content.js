@@ -14,7 +14,11 @@
     tweetId: null,
     domFallback: null,
     focal: null,
+    ancestors: [],
+    focusFocalOnRender: false,
     replies: [],
+    pinnedReplyIds: [],
+    scrollRepliesToTop: false,
     cursor: null,
     sort: "relevant",
     sortOpen: false,
@@ -136,6 +140,53 @@
     return !links.length || links.includes(url);
   }
 
+  function snapshotAttachment(scope, url) {
+    const articleCover = [...scope.querySelectorAll('[data-testid="article-cover-image"]')]
+      .find((node) => belongsToPost(node, scope, url));
+    if (articleCover) {
+      const card = articleCover.parentElement;
+      const lines = String(card?.innerText || "")
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter((line) => line && line !== "文章");
+      const image = articleCover.querySelector('img[alt="文章封面图片"], img');
+      const articleLink = [...scope.querySelectorAll('[data-testid="tweetText"] a[href], a[href*="/i/article/"]')]
+        .map((anchor) => anchor.href)
+        .find((href) => /(?:x|twitter)\.com\/i\/article\//i.test(href)) || "";
+      return {
+        type: "article",
+        url: articleLink,
+        sourceUrl: "",
+        domain: "x.com",
+        title: lines[0] || "",
+        description: lines.slice(1).join("\n"),
+        image: String(image?.currentSrc || image?.src || ""),
+        imageWidth: Number(image?.naturalWidth) || 0,
+        imageHeight: Number(image?.naturalHeight) || 0
+      };
+    }
+
+    const card = [...scope.querySelectorAll('[data-testid="card.wrapper"]')]
+      .find((node) => belongsToPost(node, scope, url));
+    if (!card) return null;
+    const anchor = card.querySelector('a[href]');
+    const ariaLabel = String(anchor?.getAttribute("aria-label") || "").trim();
+    const domain = ariaLabel.split(/\s+/)[0] || "";
+    const title = String(card.innerText || "").trim() || ariaLabel.slice(domain.length).trim();
+    const image = card.querySelector("img");
+    return {
+      type: "website",
+      url: String(anchor?.href || ""),
+      sourceUrl: String(anchor?.getAttribute("href") || ""),
+      domain,
+      title,
+      description: "",
+      image: String(image?.currentSrc || image?.src || ""),
+      imageWidth: Number(image?.naturalWidth) || 0,
+      imageHeight: Number(image?.naturalHeight) || 0
+    };
+  }
+
   function snapshotArticle(article, target, url) {
     const id = Core.postIdFromUrl(url);
     if (!id) return null;
@@ -199,6 +250,7 @@
       counts: { replies: 0, reposts: 0, likes: 0, bookmarks: 0, quotes: 0, views: 0 },
       flags: { liked: false, reposted: false, bookmarked: false },
       media,
+      attachment: snapshotAttachment(scope, url),
       quote: null
     };
   }
@@ -228,7 +280,11 @@
       tweetId: null,
       domFallback: null,
       focal: null,
+      ancestors: [],
+      focusFocalOnRender: false,
       replies: [],
+      pinnedReplyIds: [],
+      scrollRepliesToTop: false,
       cursor: null,
       sort: "relevant",
       sortOpen: false,
@@ -286,15 +342,19 @@
 
   function appendRichText(container, model) {
     let text = String(model.text || "");
-    const ranges = [...(model.entities || [])];
-    if (model.media?.length && !ranges.some((range) => range.kind === "media")) {
+    const attachmentUrls = new Set([model.attachment?.url, model.attachment?.sourceUrl].filter(Boolean));
+    const ranges = [...(model.entities || [])].map((range) => {
+      if (range.kind === "url" && attachmentUrls.has(range.url)) return { ...range, kind: "attachment" };
+      return range;
+    });
+    if ((model.media?.length || model.attachment) && !ranges.some((range) => range.kind === "media" || range.kind === "attachment")) {
       text = text.replace(/\s*https:\/\/t\.co\/[A-Za-z0-9]+\s*$/, "");
     }
     let cursor = 0;
     for (const range of ranges) {
       if (range.start < cursor || range.start > text.length || range.end > text.length) continue;
       container.append(document.createTextNode(text.slice(cursor, range.start)));
-      if (range.kind !== "media") {
+      if (range.kind !== "media" && range.kind !== "attachment") {
         const link = element("a", "tuzai-entity-link", range.label || text.slice(range.start, range.end));
         link.href = range.url || "#";
         link.target = "_blank";
@@ -493,6 +553,153 @@
     return grid;
   }
 
+  function attachmentCard(model, compact = false) {
+    const attachment = model.attachment;
+    if (!attachment || (!attachment.image && !attachment.title && !attachment.description)) return null;
+    if (attachment.type === "article" && attachment.content?.blocks?.length && !compact) return articleReader(model);
+    const card = element("a", `tuzai-attachment-card tuzai-attachment-${attachment.type || "website"}${compact ? " tuzai-attachment-compact" : ""}`);
+    card.href = attachment.url || model.url;
+    card.target = "_blank";
+    card.rel = "noreferrer";
+    card.setAttribute("aria-label", `${attachment.type === "article" ? "阅读文章" : "打开链接"}：${attachment.title || attachment.domain || "外部内容"}`);
+
+    if (attachment.image) {
+      const media = element("div", "tuzai-attachment-media");
+      const image = document.createElement("img");
+      image.src = attachment.image;
+      image.alt = attachment.type === "article" ? "文章封面图片" : "链接预览图片";
+      image.loading = "lazy";
+      if (attachment.imageWidth > 0 && attachment.imageHeight > 0) media.style.aspectRatio = `${attachment.imageWidth} / ${attachment.imageHeight}`;
+      media.append(image);
+      if (attachment.type === "article") media.append(element("span", "tuzai-article-badge", "文章"));
+      card.append(media);
+    }
+
+    if (attachment.type === "article") {
+      const body = element("div", "tuzai-attachment-body");
+      if (attachment.title) body.append(element("strong", "tuzai-attachment-title", attachment.title));
+      if (attachment.description) body.append(element("p", "tuzai-attachment-description", attachment.description));
+      card.append(body);
+    } else {
+      const meta = element("div", "tuzai-attachment-source");
+      meta.append(icon("ph-link-simple"), element("span", "", attachment.domain ? `来自 ${attachment.domain}` : attachment.title || "打开链接"));
+      card.append(meta);
+    }
+    return card;
+  }
+
+  function appendArticleInline(parent, block, entities) {
+    const text = block.text || "";
+    if (!text) return;
+    const styles = block.inlineStyles || [];
+    const ranges = block.entityRanges || [];
+    let start = 0;
+    while (start < text.length) {
+      const activeStyles = styles.filter((range) => start >= range.offset && start < range.offset + range.length).map((range) => range.style).sort();
+      const activeEntity = ranges.find((range) => start >= range.offset && start < range.offset + range.length);
+      let end = start + 1;
+      while (end < text.length) {
+        const nextStyles = styles.filter((range) => end >= range.offset && end < range.offset + range.length).map((range) => range.style).sort();
+        const nextEntity = ranges.find((range) => end >= range.offset && end < range.offset + range.length);
+        if (activeStyles.join("|") !== nextStyles.join("|") || activeEntity?.key !== nextEntity?.key) break;
+        end += 1;
+      }
+      let node = document.createTextNode(text.slice(start, end));
+      if (activeStyles.some((style) => /BOLD/i.test(style))) {
+        const strong = document.createElement("strong");
+        strong.append(node);
+        node = strong;
+      }
+      if (activeStyles.some((style) => /ITALIC/i.test(style))) {
+        const em = document.createElement("em");
+        em.append(node);
+        node = em;
+      }
+      if (activeStyles.some((style) => /UNDERLINE/i.test(style))) {
+        const underline = document.createElement("u");
+        underline.append(node);
+        node = underline;
+      }
+      const entity = activeEntity ? entities?.[activeEntity.key] : null;
+      if (entity?.url) {
+        const link = document.createElement("a");
+        link.href = entity.url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.append(node);
+        node = link;
+      }
+      parent.append(node);
+      start = end;
+    }
+  }
+
+  function articleReader(model) {
+    const attachment = model.attachment;
+    const reader = element("section", "tuzai-article-reader");
+    if (attachment.image) {
+      const cover = element("div", "tuzai-article-cover");
+      const image = document.createElement("img");
+      image.src = attachment.image;
+      image.alt = "文章封面图片";
+      image.loading = "lazy";
+      if (attachment.imageWidth > 0 && attachment.imageHeight > 0) cover.style.aspectRatio = `${attachment.imageWidth} / ${attachment.imageHeight}`;
+      cover.append(image, element("span", "tuzai-article-badge", "文章"));
+      reader.append(cover);
+    }
+    const heading = element("header", "tuzai-article-heading");
+    if (attachment.title) heading.append(element("h1", "", attachment.title));
+    const open = element("a", "tuzai-article-open");
+    open.href = attachment.url || model.url;
+    open.target = "_blank";
+    open.rel = "noreferrer";
+    open.append(icon("ph-arrow-square-out"), document.createTextNode("在 X 打开文章"));
+    heading.append(open);
+    reader.append(heading);
+
+    const body = element("div", "tuzai-article-content");
+    let activeList = null;
+    for (const block of attachment.content.blocks) {
+      const type = block.type.toLowerCase();
+      if (type === "atomic") {
+        activeList = null;
+        const entity = attachment.content.entities?.[block.entityRanges?.[0]?.key];
+        if (entity?.image) {
+          const figure = document.createElement("figure");
+          const image = document.createElement("img");
+          image.src = entity.image;
+          image.alt = entity.alt || "文章图片";
+          image.loading = "lazy";
+          figure.append(image);
+          body.append(figure);
+        }
+        continue;
+      }
+      const listType = type.includes("unordered-list") ? "ul" : type.includes("ordered-list") ? "ol" : "";
+      if (listType) {
+        if (!activeList || activeList.tagName.toLowerCase() !== listType) {
+          activeList = document.createElement(listType);
+          body.append(activeList);
+        }
+        const item = document.createElement("li");
+        appendArticleInline(item, block, attachment.content.entities);
+        activeList.append(item);
+        continue;
+      }
+      activeList = null;
+      const tag = type.includes("header-one") ? "h2"
+        : type.includes("header-two") ? "h3"
+          : type.includes("header-three") ? "h4"
+            : type.includes("blockquote") ? "blockquote"
+              : "p";
+      const node = document.createElement(tag);
+      appendArticleInline(node, block, attachment.content.entities);
+      if (node.textContent || tag === "p") body.append(node);
+    }
+    reader.append(body);
+    return reader;
+  }
+
   function quoteCard(model) {
     if (!model.quote) return null;
     const quote = element("section", "tuzai-quote-card");
@@ -512,6 +719,8 @@
     quote.append(quoteLink, text);
     const media = mediaGrid(model.quote, true);
     if (media) quote.append(media);
+    const attachment = attachmentCard(model.quote, true);
+    if (attachment) quote.append(attachment);
     return quote;
   }
 
@@ -560,6 +769,8 @@
     article.append(header, text);
     const media = mediaGrid(model);
     if (media) article.append(media);
+    const attachment = attachmentCard(model);
+    if (attachment) article.append(attachment);
     const quote = quoteCard(model);
     if (quote) article.append(quote);
     const meta = element("div", "tuzai-post-meta");
@@ -571,8 +782,54 @@
     return article;
   }
 
+  function renderThreadAncestor(model) {
+    const article = element("article", "tuzai-thread-ancestor");
+    const header = authorLine(model, true);
+    const open = element("a", "tuzai-post-more");
+    open.href = model.url;
+    open.target = "_blank";
+    open.rel = "noreferrer";
+    open.setAttribute("aria-label", "在 X 打开上文帖子");
+    open.append(icon("ph-dots-three"));
+    header.append(open);
+    const text = element("div", "tuzai-thread-text");
+    appendRichText(text, model);
+    article.append(header, text);
+    const media = mediaGrid(model, true);
+    if (media) article.append(media);
+    const attachment = attachmentCard(model, true);
+    if (attachment) article.append(attachment);
+    const quote = quoteCard(model);
+    if (quote) article.append(quote);
+    article.append(actionBar(model, true));
+    return article;
+  }
+
+  function renderPostThread() {
+    if (!state.ancestors.length) return renderPost(state.focal);
+    const thread = element("div", "tuzai-thread-context");
+    state.ancestors.forEach((ancestor) => thread.append(renderThreadAncestor(ancestor)));
+    const focal = renderPost(state.focal);
+    focal.classList.add("tuzai-thread-focal");
+    thread.append(focal);
+    return thread;
+  }
+
+  function focusFocalPostOnce(postBody) {
+    if (!state.focusFocalOnRender) return;
+    state.focusFocalOnRender = false;
+    window.requestAnimationFrame(() => {
+      if (!document.getElementById(ROOT_ID) || !postBody.isConnected) return;
+      const focal = postBody.querySelector(".tuzai-thread-focal");
+      if (!focal) return;
+      const offset = focal.getBoundingClientRect().top - postBody.getBoundingClientRect().top;
+      postBody.scrollTop = Math.max(0, postBody.scrollTop + offset - 8);
+    });
+  }
+
   function renderReply(model) {
     const article = element("article", "tuzai-reply-card");
+    article.dataset.tweetId = model.id;
     article.style.setProperty("--tuzai-depth", String(model.depth || 0));
     article.dataset.depth = String(model.depth || 0);
     const header = authorLine(model, true);
@@ -582,6 +839,8 @@
     body.append(header, text);
     const media = mediaGrid(model, true);
     if (media) body.append(media);
+    const attachment = attachmentCard(model, true);
+    if (attachment) body.append(attachment);
     const quote = quoteCard(model);
     if (quote) body.append(quote);
     body.append(actionBar(model, true));
@@ -606,10 +865,12 @@
   }
 
   function sortedReplies() {
-    const replies = [...state.replies];
-    if (state.sort === "latest") return replies.sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
-    if (state.sort === "liked") return replies.sort((left, right) => right.counts.likes - left.counts.likes);
-    return replies;
+    const pinned = state.pinnedReplyIds.map((id) => state.replies.find((reply) => reply.id === id)).filter(Boolean);
+    const pinnedIds = new Set(pinned.map((reply) => reply.id));
+    const replies = state.replies.filter((reply) => !pinnedIds.has(reply.id));
+    if (state.sort === "latest") replies.sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
+    if (state.sort === "liked") replies.sort((left, right) => right.counts.likes - left.counts.likes);
+    return [...pinned, ...replies];
   }
 
   function renderSortMenu(container) {
@@ -708,11 +969,16 @@
     const replyTools = root.querySelector(".tuzai-reply-tools");
     const replyList = root.querySelector(".tuzai-reply-list");
     const count = root.querySelector(".tuzai-reply-count");
+    const postTitle = root.querySelector(".tuzai-post-pane-title");
+    const postSubtitle = root.querySelector(".tuzai-post-pane-subtitle");
     if (!postBody || !replyTools || !replyList || !count) return;
     destroyHlsPlayers();
     postBody.replaceChildren();
+    postBody.dataset.hasContext = String(Boolean(state.ancestors.length));
     replyList.replaceChildren();
     count.textContent = state.focal ? formatCount(state.focal.counts.replies || state.replies.length) || "0" : "…";
+    if (postTitle) postTitle.textContent = state.ancestors.length ? "帖子线程" : "原帖";
+    if (postSubtitle) postSubtitle.textContent = state.ancestors.length ? "上文与当前回复" : "内容与基础互动";
 
     if (state.loading) {
       postBody.append(loadingState("正在加载原帖"));
@@ -727,7 +993,8 @@
       return;
     }
 
-    postBody.append(renderPost(state.focal));
+    postBody.append(renderPostThread());
+    focusFocalPostOnce(postBody);
     renderReplyTools(replyTools);
     const replies = sortedReplies();
     if (!replies.length) {
@@ -744,12 +1011,27 @@
       loadMore.addEventListener("click", () => fetchMore());
       replyList.append(loadMore);
     }
+    if (state.scrollRepliesToTop) {
+      state.scrollRepliesToTop = false;
+      window.requestAnimationFrame(() => {
+        if (replyList.isConnected) replyList.scrollTop = 0;
+      });
+    }
   }
 
   function mergeReplies(items) {
     const map = new Map(state.replies.map((reply) => [reply.id, reply]));
     for (const reply of items) map.set(reply.id, { ...map.get(reply.id), ...reply });
     state.replies = [...map.values()];
+  }
+
+  async function hydrateArticle(model) {
+    if (model?.attachment?.type !== "article" || model.attachment.content?.blocks?.length) return model;
+    const json = await requestPage("READ_ARTICLE", { tweetId: model.id });
+    const hydrated = Core.collectTweetModels(json).find((item) => item.id === model.id);
+    if (hydrated) return Core.mergeModelFallback(hydrated, model);
+    const attachment = Core.articleAttachmentFromPayload(json);
+    return attachment ? { ...model, attachment: { ...model.attachment, ...attachment, url: attachment.url || model.attachment.url } } : model;
   }
 
   async function fetchThread() {
@@ -763,7 +1045,19 @@
       const parsed = Core.parseTweetDetail(json, state.tweetId);
       state.focal = Core.mergeModelFallback(parsed.focal, state.domFallback);
       if (!state.focal) throw new Error("X 返回了数据，但没有找到这条原帖");
+      state.ancestors = parsed.ancestors;
+      const leftModels = await Promise.all([...state.ancestors, state.focal].map(async (model) => {
+        try {
+          return await hydrateArticle(model);
+        } catch {
+          return model;
+        }
+      }));
+      state.focal = leftModels.pop();
+      state.ancestors = leftModels;
+      state.focusFocalOnRender = state.ancestors.length > 0;
       state.replies = parsed.replies;
+      state.pinnedReplyIds = [];
       state.cursor = parsed.cursor;
       state.replyTarget = state.focal;
     } catch (error) {
@@ -794,6 +1088,8 @@
 
   function findModel(tweetId) {
     if (state.focal?.id === tweetId) return state.focal;
+    const ancestor = state.ancestors.find((model) => model.id === tweetId);
+    if (ancestor) return ancestor;
     return state.replies.find((reply) => reply.id === tweetId) || null;
   }
 
@@ -849,11 +1145,13 @@
     try {
       const json = await requestPage("CREATE_REPLY", { tweetId: target.id, text });
       const created = Core.collectTweetModels(json).find((model) => model.id !== state.focal?.id);
-      if (created) {
+      if (created && (target.id === state.focal.id || state.replies.some((reply) => reply.id === target.id))) {
         created.depth = target.id === state.focal.id ? 0 : Math.min((target.depth || 0) + 1, 3);
         mergeReplies([created]);
+        state.pinnedReplyIds = [created.id, ...state.pinnedReplyIds.filter((id) => id !== created.id)];
+        state.scrollRepliesToTop = true;
       }
-      if (state.focal) state.focal.counts.replies += 1;
+      target.counts.replies += 1;
       state.replyText = "";
       state.replyTarget = state.focal;
       notify("回复已发布到 X");
@@ -902,7 +1200,7 @@
       </header>
       <div class="tuzai-reader-grid">
         <section class="tuzai-pane tuzai-post-pane">
-          <header class="tuzai-pane-header"><div><strong>原帖</strong><span>内容与基础互动</span></div><span class="tuzai-interactive-pill">独立滚动</span></header>
+          <header class="tuzai-pane-header"><div><strong class="tuzai-post-pane-title">原帖</strong><span class="tuzai-post-pane-subtitle">内容与基础互动</span></div><span class="tuzai-interactive-pill">独立滚动</span></header>
           <div class="tuzai-scroll-area tuzai-post-body"></div>
         </section>
         <section class="tuzai-pane tuzai-replies-pane">
@@ -935,6 +1233,7 @@
 
   function handleTimelineClick(event) {
     if (!state.enabled || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    if (Core.isPostDetailUrl(location.href)) return;
     if (document.getElementById(ROOT_ID)) return;
     const article = event.target.closest?.('article[data-testid="tweet"]');
     if (!article || !isTopLevelTweet(article) || shouldSkipTarget(event.target)) return;

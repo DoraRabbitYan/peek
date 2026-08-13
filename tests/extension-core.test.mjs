@@ -19,6 +19,13 @@ test("rejects non-status and non-X links", () => {
   assert.equal(Core.normalizePostUrl("https://x.com/explore"), null);
 });
 
+test("recognizes X post detail routes so the timeline reader can stand down", () => {
+  assert.equal(Core.isPostDetailUrl("https://x.com/author/status/123"), true);
+  assert.equal(Core.isPostDetailUrl("https://x.com/author/status/123/photo/1"), true);
+  assert.equal(Core.isPostDetailUrl("https://x.com/notifications"), false);
+  assert.equal(Core.isPostDetailUrl("https://x.com/home"), false);
+});
+
 test("selects the source author's status link instead of a quoted status", () => {
   const hrefs = [
     "/quoted/status/100/photo/1",
@@ -87,11 +94,48 @@ test("parses focal post, nested replies, media and the bottom cursor", () => {
   assert.equal(parsed.focal.id, "100");
   assert.equal(parsed.focal.author.handle, "author");
   assert.equal(parsed.focal.counts.views, 1234);
+  assert.deepEqual(Array.from(parsed.ancestors, (model) => model.id), []);
   assert.equal(parsed.replies.length, 2);
   assert.equal(parsed.replies[0].media[0].videoUrl, "https://video.example/medium.mp4");
   assert.equal(Core.selectVideoVariant(parsed.replies[0].media[0].videoVariants, 500000).url, "https://video.example/low.mp4");
   assert.equal(parsed.replies[1].depth, 1);
   assert.equal(parsed.cursor, "cursor-next");
+});
+
+test("returns the complete parent chain when the clicked notification post is a reply", () => {
+  const author = (id, screenName) => ({
+    rest_id: id,
+    legacy: { name: screenName, screen_name: screenName, profile_image_url_https: `https://img.example/${id}_normal.jpg` }
+  });
+  const tweet = (id, parent, screenName) => ({
+    rest_id: id,
+    core: { user_results: { result: author(`u-${id}`, screenName) } },
+    legacy: {
+      id_str: id,
+      full_text: `帖子 ${id}`,
+      conversation_id_str: "500",
+      in_reply_to_status_id_str: parent,
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    }
+  });
+  const root = tweet("500", "", "root");
+  const parent = tweet("501", "500", "parent");
+  const focalReply = tweet("502", "501", "focal");
+  const childReply = tweet("503", "502", "child");
+  const sibling = tweet("504", "501", "sibling");
+  const json = { data: { thread: [
+    { tweet_results: { result: childReply } },
+    { tweet_results: { result: parent } },
+    { tweet_results: { result: focalReply } },
+    { tweet_results: { result: root } },
+    { tweet_results: { result: sibling } }
+  ] } };
+
+  const parsed = Core.parseTweetDetail(json, "502");
+  assert.equal(parsed.focal.id, "502");
+  assert.deepEqual(Array.from(parsed.ancestors, (model) => model.id), ["500", "501"]);
+  assert.deepEqual(Array.from(parsed.replies, (model) => model.id), ["503"]);
+  assert.equal(parsed.replies[0].depth, 0);
 });
 
 test("keeps current X video variants when the MIME type has parameters or bitrate is absent", () => {
@@ -146,6 +190,122 @@ test("preserves an HLS-only item as video instead of silently treating its poste
   assert.equal(result.media[0].type, "video");
   assert.equal(result.media[0].videoUrl, "");
   assert.equal(result.media[0].hlsUrl, "https://video.example/only.m3u8");
+});
+
+test("parses X website cards instead of leaving only their short link", () => {
+  const result = Core.tweetModel({
+    rest_id: "160",
+    legacy: {
+      id_str: "160",
+      full_text: "项目地址 https://t.co/card123",
+      conversation_id_str: "160",
+      entities: {
+        urls: [{
+          indices: [5, 25],
+          url: "https://t.co/card123",
+          expanded_url: "https://github.com/example/project",
+          display_url: "github.com/example/project"
+        }],
+        user_mentions: [],
+        hashtags: []
+      }
+    },
+    card: {
+      legacy: {
+        url: "https://t.co/card123",
+        binding_values: [
+          { key: "domain", value: { string_value: "github.com" } },
+          { key: "title", value: { string_value: "GitHub - example/project" } },
+          { key: "description", value: { string_value: "项目说明" } },
+          { key: "summary_photo_image_original", value: { image_value: { url: "https://img.example/card.jpg", width: 1200, height: 600 } } }
+        ]
+      }
+    }
+  });
+
+  assert.equal(result.attachment.type, "website");
+  assert.equal(result.attachment.url, "https://github.com/example/project");
+  assert.equal(result.attachment.domain, "github.com");
+  assert.equal(result.attachment.title, "GitHub - example/project");
+  assert.equal(result.attachment.image, "https://img.example/card.jpg");
+  assert.equal(result.attachment.imageWidth, 1200);
+});
+
+test("parses X articles with their cover, title, preview and rich body", () => {
+  const result = Core.tweetModel({
+    rest_id: "161",
+    legacy: {
+      id_str: "161",
+      full_text: "一篇长文 https://t.co/article123",
+      conversation_id_str: "161",
+      entities: {
+        urls: [{
+          indices: [5, 28],
+          url: "https://t.co/article123",
+          expanded_url: "https://x.com/i/article/2087740235509809601",
+          display_url: "x.com/i/article/2087…"
+        }],
+        user_mentions: [],
+        hashtags: []
+      }
+    },
+    article: {
+      article_results: {
+        result: {
+          title: "轮回的真相",
+          preview_text: "禅修超过 1000 小时后，我对死亡有了新的认识。",
+          cover_media: {
+            media_info: {
+              original_img_url: "https://img.example/article.jpg",
+              original_img_width: 1200,
+              original_img_height: 480
+            }
+          },
+          content_state: {
+            blocks: [
+              { key: "title", type: "header-one", text: "禅修 1000+ 小时后", depth: 0, inlineStyleRanges: [], entityRanges: [] },
+              { key: "body", type: "unstyled", text: "死亡不是终点。", depth: 0, inlineStyleRanges: [{ offset: 0, length: 7, style: "BOLD" }], entityRanges: [] }
+            ],
+            entityMap: {}
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(result.attachment.type, "article");
+  assert.equal(result.attachment.url, "https://x.com/i/article/2087740235509809601");
+  assert.equal(result.attachment.title, "轮回的真相");
+  assert.equal(result.attachment.description, "禅修超过 1000 小时后，我对死亡有了新的认识。");
+  assert.equal(result.attachment.image, "https://img.example/article.jpg");
+  assert.equal(result.attachment.imageHeight, 480);
+  assert.equal(result.attachment.content.blocks.length, 2);
+  assert.equal(result.attachment.content.blocks[0].type, "header-one");
+  assert.equal(result.attachment.content.blocks[1].inlineStyles[0].style, "BOLD");
+});
+
+test("finds a hydrated X article body even when it is not wrapped as a tweet model", () => {
+  const attachment = Core.articleAttachmentFromPayload({
+    data: {
+      tweetResult: {
+        result: {
+          article: {
+            article_results: {
+              result: {
+                title: "完整长文",
+                content_state: {
+                  blocks: [{ key: "one", type: "unstyled", text: "正文第一段", inlineStyleRanges: [], entityRanges: [] }],
+                  entityMap: {}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+  assert.equal(attachment.title, "完整长文");
+  assert.equal(attachment.content.blocks[0].text, "正文第一段");
 });
 
 test("parses the current X user shape when legacy profile fields are absent", () => {
@@ -214,18 +374,23 @@ test("manifest keeps permissions limited to local state and X hosts", async () =
   assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
   assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
   assert.equal(manifest.background, undefined);
-  assert.equal(manifest.version, "0.8.2");
+  assert.equal(manifest.version, "0.8.4");
 });
 
 test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {
   const content = await readFile(path.resolve("extension/content.js"), "utf8");
   const bridge = await readFile(path.resolve("extension/page-bridge.js"), "utf8");
   assert.match(content, /READ_THREAD/);
+  assert.match(content, /READ_ARTICLE/);
   assert.match(content, /CREATE_REPLY/);
   assert.match(content, /TOGGLE_ACTION/);
   assert.match(content, /preload = "none"/);
   assert.match(content, /selectVideoVariant/);
   assert.match(content, /snapshotArticle/);
+  assert.match(content, /Core\.isPostDetailUrl\(location\.href\)/);
+  assert.match(content, /renderThreadAncestor/);
+  assert.match(content, /focusFocalPostOnce/);
+  assert.match(content, /postBody\.scrollTop = Math\.max/);
   assert.match(content, /HlsPlayer/);
   assert.match(content, /hls-adaptive/);
   assert.match(content, /tuzai-video-play/);
@@ -238,6 +403,7 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.doesNotMatch(content, /document\.body\.style\.overflow\s*=\s*"hidden"/);
   assert.doesNotMatch(content, /document\.documentElement\.style\.overflow\s*=\s*"hidden"/);
   assert.match(bridge, /TweetDetail/);
+  assert.match(bridge, /TweetResultByRestId/);
   assert.match(bridge, /FavoriteTweet/);
   assert.match(bridge, /CreateRetweet/);
   assert.match(bridge, /CreateBookmark/);
