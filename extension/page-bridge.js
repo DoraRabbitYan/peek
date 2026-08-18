@@ -361,6 +361,10 @@
     });
   }
 
+  function toggleFollow(userId, active) {
+    return graphql(active ? "CreateFriendship" : "DestroyFriendship", { user_id: userId });
+  }
+
   function respond(requestId, ok, payload) {
     window.postMessage({ source: PAGE_SOURCE, requestId, ok, ...(ok ? { payload } : { error: payload }) }, location.origin);
   }
@@ -369,6 +373,15 @@
     if (event.source !== window || event.origin !== location.origin) return;
     const message = event.data;
     if (message?.source !== CONTENT_SOURCE || !Number.isInteger(message.requestId)) return;
+    if (message.type === "TOGGLE_FOLLOW") {
+      const userId = String(message.userId || "");
+      if (!/^\d+$/.test(userId)) return respond(message.requestId, false, "用户 ID 无效");
+      try {
+        return respond(message.requestId, true, await toggleFollow(userId, Boolean(message.active)));
+      } catch (error) {
+        return respond(message.requestId, false, error instanceof Error ? error.message : "X 请求失败");
+      }
+    }
     const tweetId = String(message.tweetId || "");
     if (!/^\d+$/.test(tweetId)) return respond(message.requestId, false, "帖子 ID 无效");
     try {

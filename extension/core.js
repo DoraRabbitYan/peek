@@ -433,7 +433,12 @@
         name: userLegacy.name || userCore.name || handle || "X 用户",
         handle,
         avatar: String(userLegacy.profile_image_url_https || user?.avatar?.image_url || "").replace("_normal.", "_200x200."),
-        verified: Boolean(user?.is_blue_verified || userLegacy.verified || user?.verification?.verified || user?.verification?.is_blue_verified)
+        verified: Boolean(user?.is_blue_verified || userLegacy.verified || user?.verification?.verified || user?.verification?.is_blue_verified),
+        description: String(userLegacy.description || userCore.description || user?.profile_bio?.description || ""),
+        followers: numberValue(userLegacy.followers_count ?? user?.relationship_counts?.followers_count ?? user?.relationship_counts?.followers),
+        followingCount: numberValue(userLegacy.friends_count ?? user?.relationship_counts?.following_count ?? user?.relationship_counts?.following),
+        viewerFollowing: Boolean(userLegacy.following || user?.relationship_perspectives?.following),
+        followsViewer: Boolean(userLegacy.followed_by || user?.relationship_perspectives?.followed_by)
       },
       createdAt: legacy.created_at || "",
       conversationId: String(legacy.conversation_id_str || ""),
@@ -509,7 +514,12 @@
         name: placeholderName ? fallbackAuthor.name || author.name : author.name,
         handle: author.handle || fallbackAuthor.handle || "",
         avatar: author.avatar || fallbackAuthor.avatar || "",
-        verified: Boolean(author.verified || fallbackAuthor.verified)
+        verified: Boolean(author.verified || fallbackAuthor.verified),
+        description: author.description || fallbackAuthor.description || "",
+        followers: author.followers || fallbackAuthor.followers || 0,
+        followingCount: author.followingCount || fallbackAuthor.followingCount || 0,
+        viewerFollowing: Boolean(author.viewerFollowing || fallbackAuthor.viewerFollowing),
+        followsViewer: Boolean(author.followsViewer || fallbackAuthor.followsViewer)
       },
       media,
       attachment
@@ -561,6 +571,11 @@
     }
     visit(value);
     return cursor || fallback;
+  }
+
+  function replyCursorAfterPage(previousCursor, nextCursor, addedCount) {
+    const next = String(nextCursor || "");
+    return Number(addedCount) > 0 && next && next !== String(previousCursor || "") ? next : null;
   }
 
   function parseTweetDetail(json, focalTweetId) {
@@ -625,6 +640,7 @@
     mergeModelFallback,
     collectTweetModels,
     articleAttachmentFromPayload,
+    replyCursorAfterPage,
     parseTweetDetail
   });
 })(typeof globalThis === "object" ? globalThis : self);

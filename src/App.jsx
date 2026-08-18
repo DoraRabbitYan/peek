@@ -37,11 +37,34 @@ const replySorts = {
 };
 
 function Action({ icon, children, active = false, label, onClick }) {
+  const tone = icon === "ph-heart" ? " demo-action-like" : icon === "ph-arrows-clockwise" ? " demo-action-repost" : "";
   return (
-    <button className="demo-action" data-active={active || undefined} aria-label={label} onClick={onClick}>
-      <i className={`ph ${icon}`} aria-hidden="true" />
-      {children}
+    <button className={`demo-action${tone}`} data-active={active || undefined} aria-label={label} onClick={onClick}>
+      <span className="demo-action-surface">
+        <span className="demo-action-icon"><i className={`ph ${icon}`} aria-hidden="true" /></span>
+        {children ? <span className="demo-action-count">{children}</span> : null}
+      </span>
     </button>
+  );
+}
+
+function DemoProfileCard({ name, handle, description, followers = "1,286", following = "386" }) {
+  const [viewerFollowing, setViewerFollowing] = useState(false);
+  return (
+    <aside className="demo-profile-card" aria-label={`${name} 的账号资料`}>
+      <div className="demo-profile-card-top">
+        <Avatar />
+        <button type="button" data-following={viewerFollowing} onClick={() => setViewerFollowing((value) => !value)}>
+          <span className="demo-follow-default">{viewerFollowing ? "正在关注" : "关注"}</span>
+          <span className="demo-follow-hover">取消关注</span>
+        </button>
+      </div>
+      <a href={`https://x.com/${handle.replace(/^@/, "")}`} target="_blank" rel="noreferrer"><strong>{name}</strong></a>
+      <a className="demo-profile-handle" href={`https://x.com/${handle.replace(/^@/, "")}`} target="_blank" rel="noreferrer">{handle}</a>
+      <p>{description}</p>
+      <div className="demo-profile-stats"><b>{following}</b> 正在关注 <b>{Number(String(followers).replace(/,/g, "")) + Number(viewerFollowing)}</b> 关注者</div>
+      <a className="demo-profile-summary" href={`https://x.com/i/grok?text=${encodeURIComponent(`请总结 ${handle} 的个人资料`)}`} target="_blank" rel="noreferrer"><i className="ph ph-sparkle" />个人资料概要</a>
+    </aside>
   );
 }
 
@@ -56,15 +79,16 @@ function Avatar() {
 function MockPost({ metrics, onAction }) {
   return (
     <article className="demo-post-card">
-      <div className="demo-post-author">
+      <div className="demo-post-author demo-profile-host">
         <Avatar />
         <div>
-          <strong>兔仔研究所</strong>
-          <span>@tuzai_lab · 1小时</span>
+          <strong className="demo-profile-name">兔仔研究所</strong>
+          <span className="demo-profile-name">@tuzai_lab · 1小时</span>
         </div>
         <button className="demo-more" aria-label="更多" onClick={() => onAction("more")}>
           <i className="ph ph-dots-three" aria-hidden="true" />
         </button>
+        <DemoProfileCard name="兔仔研究所" handle="@tuzai_lab" description="专注改进 X 上的帖子阅读和讨论体验。" />
       </div>
       <div className="demo-post-copy">
         <p>做了一个更顺手的 X 帖子阅读方式。</p>
@@ -87,12 +111,12 @@ function MockPost({ metrics, onAction }) {
 
 function Reply({ reply, onAction }) {
   return (
-    <article className="demo-reply-card">
+    <article className="demo-reply-card demo-profile-host">
       <Avatar />
       <div className="demo-reply-main">
         <div className="demo-reply-meta">
-          <strong>{reply.name}</strong>
-          <span>{reply.handle} · {reply.time}</span>
+          <strong className="demo-profile-name">{reply.name}</strong>
+          <span className="demo-profile-name">{reply.handle} · {reply.time}</span>
           <i className="ph ph-dots-three" aria-hidden="true" />
         </div>
         <p>{reply.text}</p>
@@ -103,6 +127,7 @@ function Reply({ reply, onAction }) {
           <Action icon="ph-share-fat" label={`分享 ${reply.name} 的回复`} onClick={() => onAction("share", reply)} />
         </div>
       </div>
+      <DemoProfileCard name={reply.name} handle={reply.handle} description="分享产品、设计与 AI 实践。" followers="932" following="215" />
     </article>
   );
 }
@@ -135,10 +160,31 @@ export function App() {
   const [replyItems, setReplyItems] = useState(initialReplies);
   const [replyTarget, setReplyTarget] = useState("原帖");
   const [replyText, setReplyText] = useState("");
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [replySort, setReplySort] = useState("relevant");
   const [sortOpen, setSortOpen] = useState(false);
   const [toast, setToast] = useState("");
   const toastTimer = useRef(null);
+  const replyInput = useRef(null);
+
+  const resizeReplyInput = (input = replyInput.current) => {
+    if (!input) return;
+    input.style.height = "auto";
+    const maxHeight = 168;
+    const height = Math.min(Math.max(input.scrollHeight, 28), maxHeight);
+    input.style.height = `${height}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+  };
+
+  const collapseReplyComposer = (composer) => {
+    window.setTimeout(() => {
+      const input = replyInput.current;
+      if (!input || composer.contains(document.activeElement) || input.value.trim() || replyTarget !== "原帖") return;
+      input.style.height = "28px";
+      input.style.overflowY = "hidden";
+      setComposerExpanded(false);
+    }, 0);
+  };
 
   useEffect(() => {
     const closeOnEscape = (event) => {
@@ -165,7 +211,8 @@ export function App() {
   const handlePostAction = (action) => {
     if (action === "reply") {
       setReplyTarget("原帖");
-      document.querySelector(".tuzai-composer textarea")?.focus();
+      setComposerExpanded(true);
+      window.requestAnimationFrame(() => replyInput.current?.focus());
       return;
     }
     if (action === "share") {
@@ -189,7 +236,8 @@ export function App() {
   const handleReplyAction = (action, reply) => {
     if (action === "reply") {
       setReplyTarget(reply.name);
-      document.querySelector(".tuzai-composer textarea")?.focus();
+      setComposerExpanded(true);
+      window.requestAnimationFrame(() => replyInput.current?.focus());
     } else if (action === "share") {
       navigator.clipboard?.writeText(`https://x.com/${reply.handle.slice(1)}/status/demo`).catch(() => {});
       notify("回复链接已复制");
@@ -207,6 +255,12 @@ export function App() {
     setReplyItems((current) => [{ name: "Tino Xu", handle: "@Tino_Xu_", time: "刚刚", minutesAgo: 0, text, likes: 0, liked: false }, ...current]);
     setReplyText("");
     setReplyTarget("原帖");
+    setComposerExpanded(false);
+    window.requestAnimationFrame(() => {
+      if (!replyInput.current) return;
+      replyInput.current.style.height = "28px";
+      replyInput.current.style.overflowY = "hidden";
+    });
     notify("回复已发布到 X");
   };
 
@@ -215,13 +269,13 @@ export function App() {
       <TimelineBackground onOpen={() => setOpen(true)} />
       {!open && <button className="demo-reopen" onClick={() => setOpen(true)}>重新打开浮层</button>}
       {open && (
-        <div className="tuzai-overlay tuzai-theme-light" role="dialog" aria-modal="true" aria-label="帖子浮层阅读器">
+        <div className="tuzai-overlay tuzai-theme-light" role="dialog" aria-modal="true" aria-label="兔崽插件帖子阅读器">
           <button className="tuzai-backdrop" aria-label="关闭浮层" onClick={() => setOpen(false)} />
           <section className="tuzai-dialog">
             <header className="tuzai-toolbar">
               <div className="tuzai-brand">
                 <img src="/assets/tuzai-icon-source.png" alt="" />
-                <div><strong>帖子浮层</strong><span>主页位置已保留</span></div>
+                <strong>兔崽插件</strong>
               </div>
               <div className="tuzai-toolbar-actions">
                 <button className="tuzai-icon-button" aria-label="在 X 打开"><i className="ph ph-arrow-square-out" /></button>
@@ -230,27 +284,28 @@ export function App() {
             </header>
             <div className="tuzai-reader-grid">
               <section className="tuzai-pane tuzai-post-pane">
-                <header className="tuzai-pane-header"><div><strong>原帖</strong><span>内容与基础互动</span></div><span className="tuzai-interactive-pill">独立滚动</span></header>
                 <div className="tuzai-scroll-area tuzai-post-body">
                   <MockPost metrics={metrics} onAction={handlePostAction} />
                 </div>
               </section>
               <section className="tuzai-pane tuzai-replies-pane">
-                <header className="tuzai-pane-header"><div><strong>评论</strong><span>按 X 默认顺序</span></div><span className="tuzai-interactive-pill">独立滚动</span></header>
                 <div className="tuzai-reply-tools">
                   <div className="tuzai-context-row">
-                    <div className="tuzai-sort-control">
-                      <button className="tuzai-sort-trigger" type="button" aria-haspopup="listbox" aria-expanded={sortOpen} aria-label="评论排序" onClick={() => setSortOpen((current) => !current)}><span>{replySorts[replySort].label}</span><i className="ph ph-caret-down" /></button>
-                      <div className="tuzai-sort-menu" role="listbox" aria-label="选择评论排序方式" hidden={!sortOpen}>
-                        {Object.entries(replySorts).map(([value, option]) => <button className="tuzai-sort-option" type="button" role="option" aria-selected={replySort === value} key={value} onClick={() => { setReplySort(value); setSortOpen(false); notify(`已按${option.orderLabel}排序`); }}><span>{option.orderLabel}</span>{replySort === value && <i className="ph ph-check tuzai-sort-check" />}</button>)}
+                    <div className="tuzai-sort-group">
+                      <div className="tuzai-sort-control">
+                        <button className="tuzai-sort-trigger" type="button" aria-haspopup="listbox" aria-expanded={sortOpen} aria-label="评论排序" onClick={() => setSortOpen((current) => !current)}><span>{replySorts[replySort].label}</span><i className="ph ph-caret-down" /></button>
+                        <div className="tuzai-sort-menu" role="listbox" aria-label="选择评论排序方式" hidden={!sortOpen}>
+                          {Object.entries(replySorts).map(([value, option]) => <button className="tuzai-sort-option" type="button" role="option" aria-selected={replySort === value} key={value} onClick={() => { setReplySort(value); setSortOpen(false); notify(`已按${option.orderLabel}排序`); }}><span>{option.orderLabel}</span>{replySort === value && <i className="ph ph-check tuzai-sort-check" />}</button>)}
+                        </div>
                       </div>
+                      <span className="tuzai-reply-count">14 条回复</span>
                     </div>
-                    <a href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看引用 <i className="ph ph-caret-right" /></a>
+                    <a className="tuzai-quotes-link" href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看引用 <i className="ph ph-caret-right" /></a>
                   </div>
-                  <section className="tuzai-composer" data-target-url="https://x.com/tuzai_lab/status/2087155564904370681">
+                  <section className="tuzai-composer" data-expanded={composerExpanded || Boolean(replyText.trim()) || replyTarget !== "原帖"} data-target-url="https://x.com/tuzai_lab/status/2087155564904370681" onFocus={() => { setComposerExpanded(true); window.requestAnimationFrame(() => resizeReplyInput()); }}>
                     <img className="tuzai-composer-avatar" src="/assets/tino-avatar.png" alt="" />
-                    <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea rows="2" maxLength="280" value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /></div>
-                    <button type="button" disabled={!replyText.trim()} onClick={publishReply}>回复</button>
+                    <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea ref={replyInput} rows="1" maxLength="280" value={replyText} onChange={(event) => { setReplyText(event.target.value); setComposerExpanded(true); resizeReplyInput(event.target); }} onBlur={(event) => collapseReplyComposer(event.currentTarget.closest(".tuzai-composer"))} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /><span className="tuzai-composer-count">{replyText.length}/280</span></div>
+                    <button className="tuzai-reply-submit" type="button" disabled={!replyText.trim()} onClick={publishReply}>回复</button>
                   </section>
                 </div>
                 <div className="tuzai-scroll-area tuzai-reply-list">
@@ -258,7 +313,6 @@ export function App() {
                 </div>
               </section>
             </div>
-            <footer className="tuzai-footer"><span><i className="ph ph-lock-key" /> 数据与操作直接使用当前登录的 X 会话，不经过第三方服务器</span><span>Esc 关闭</span></footer>
             {toast && <div className="tuzai-toast" role="status">{toast}</div>}
           </section>
         </div>

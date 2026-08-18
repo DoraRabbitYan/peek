@@ -26,6 +26,13 @@ test("recognizes X post detail routes so the timeline reader can stand down", ()
   assert.equal(Core.isPostDetailUrl("https://x.com/home"), false);
 });
 
+test("ends reply pagination when X returns no new comments or repeats a cursor", () => {
+  assert.equal(Core.replyCursorAfterPage("cursor-1", "cursor-2", 3), "cursor-2");
+  assert.equal(Core.replyCursorAfterPage("cursor-1", "cursor-2", 0), null);
+  assert.equal(Core.replyCursorAfterPage("cursor-1", "cursor-1", 3), null);
+  assert.equal(Core.replyCursorAfterPage("cursor-1", "", 3), null);
+});
+
 test("selects the source author's status link instead of a quoted status", () => {
   const hrefs = [
     "/quoted/status/100/photo/1",
@@ -313,7 +320,10 @@ test("parses the current X user shape when legacy profile fields are absent", ()
     __typename: "User",
     core: { name: "新版作者", screen_name: "modern_author" },
     avatar: { image_url: "https://img.example/u-modern_normal.jpg" },
-    verification: { is_blue_verified: true }
+    verification: { is_blue_verified: true },
+    profile_bio: { description: "新版账号简介" },
+    relationship_counts: { followers_count: 5526, following_count: 3546 },
+    relationship_perspectives: { following: true, followed_by: true }
   };
   const result = Core.tweetModel({
     rest_id: "200",
@@ -330,6 +340,11 @@ test("parses the current X user shape when legacy profile fields are absent", ()
   assert.equal(result.author.handle, "modern_author");
   assert.equal(result.author.avatar, "https://img.example/u-modern_200x200.jpg");
   assert.equal(result.author.verified, true);
+  assert.equal(result.author.description, "新版账号简介");
+  assert.equal(result.author.followers, 5526);
+  assert.equal(result.author.followingCount, 3546);
+  assert.equal(result.author.viewerFollowing, true);
+  assert.equal(result.author.followsViewer, true);
 });
 
 test("fills only missing author and media fields from the clicked X DOM snapshot", () => {
@@ -380,6 +395,7 @@ test("manifest keeps permissions limited to local state and X hosts", async () =
 test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {
   const content = await readFile(path.resolve("extension/content.js"), "utf8");
   const bridge = await readFile(path.resolve("extension/page-bridge.js"), "utf8");
+  const styles = await readFile(path.resolve("extension/content.css"), "utf8");
   assert.match(content, /READ_THREAD/);
   assert.match(content, /READ_ARTICLE/);
   assert.match(content, /CREATE_REPLY/);
@@ -414,6 +430,43 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.doesNotMatch(content, /cloneNode/);
   assert.doesNotMatch(content, /TUZAI_OPEN_POST/);
   assert.doesNotMatch(content, /TUZAI_PERFORM_ACTION/);
+  assert.match(styles, /\.tuzai-post-text[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
+  assert.match(styles, /\.tuzai-thread-text\s*\{[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
+  assert.match(content, /<strong>兔崽插件<\/strong>/);
+  assert.match(content, /tuzai-sort-group/);
+  assert.match(content, /条回复/);
+  assert.match(content, /composerExpanded/);
+  assert.match(content, /composer\.dataset\.expanded/);
+  assert.match(content, /Math\.min\(Math\.max\(textarea\.scrollHeight, 28\), maxHeight\)/);
+  assert.match(content, /IntersectionObserver/);
+  assert.match(content, /tuzai-reply-load-sentinel/);
+  assert.doesNotMatch(content, /element\("button", "tuzai-load-more"/);
+  assert.match(content, /const previousScrollTop = currentReplyList\?\.scrollTop \|\| 0/);
+  assert.match(content, /nextReplyList\.scrollTop = previousScrollTop/);
+  assert.match(content, /const added = mergeReplies\(parsed\.replies\)/);
+  assert.match(content, /state\.cursor = Core\.replyCursorAfterPage\(previousCursor, parsed\.cursor, added\)/);
+  assert.doesNotMatch(content, /element\("span", "", "正在加载更多评论"\)/);
+  assert.match(content, /tuzai-profile-card/);
+  assert.match(content, /bindProfileHover/);
+  assert.match(content, /PROFILE_CARD_HIDE_DELAY = 650/);
+  assert.match(content, /activeProfileCardKey === profileKey/);
+  assert.match(content, /TOGGLE_FOLLOW/);
+  assert.match(bridge, /CreateFriendship/);
+  assert.match(bridge, /DestroyFriendship/);
+  assert.match(styles, /width:\s*min\(300px,/);
+  assert.match(content, /tuzai-action-surface/);
+  assert.match(styles, /grid-template-rows:\s*56px minmax\(0, 1fr\)/);
+  assert.match(styles, /grid-template-columns:\s*minmax\(0, 1\.04fr\) minmax\(390px, 0\.96fr\)/);
+  assert.match(styles, /\.tuzai-article-content[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
+  assert.match(styles, /\.tuzai-article-heading h1[^}]*font-size:\s*20px/);
+  assert.match(styles, /\.tuzai-action:hover \.tuzai-action-surface/);
+  assert.match(styles, /\.tuzai-action-surface[^}]*height:\s*40px[^}]*border-radius:\s*999px/);
+  assert.doesNotMatch(styles, /\.tuzai-action:hover\s*\{[^}]*background:/);
+  assert.match(styles, /\.tuzai-composer\[data-expanded="false"\]/);
+  assert.match(styles, /\.tuzai-composer\[data-expanded="true"\]/);
+  assert.doesNotMatch(styles, /\.tuzai-composer\s*\{[^}]*min-height:\s*148px/);
+  assert.doesNotMatch(content, /tuzai-pane-header/);
+  assert.doesNotMatch(content, /tuzai-footer/);
   assert.doesNotMatch(bridge, /Bearer A{5,}/);
   assert.doesNotMatch(bridge, /chrome\.storage/);
 });

@@ -24,6 +24,7 @@
     sortOpen: false,
     replyTarget: null,
     replyText: "",
+    composerExpanded: false,
     loading: false,
     loadingMore: false,
     error: "",
@@ -36,6 +37,14 @@
   const pendingRequests = new Map();
   const hlsInstances = new Set();
   let requestSequence = 0;
+  let replyLoadObserver = null;
+  let profileCardShowTimer = null;
+  let profileCardHideTimer = null;
+  let activeProfileCard = null;
+  let activeProfileCardKey = "";
+  let activeProfileAnchor = null;
+  const PROFILE_CARD_SHOW_DELAY = 350;
+  const PROFILE_CARD_HIDE_DELAY = 650;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -273,6 +282,8 @@
     const pageScrollX = state.pageScrollX;
     const pageScrollY = state.pageScrollY;
     destroyHlsPlayers();
+    disconnectReplyLoadObserver();
+    removeProfileCard();
     root?.remove();
     window.clearTimeout(state.toastTimer);
     Object.assign(state, {
@@ -290,6 +301,7 @@
       sortOpen: false,
       replyTarget: null,
       replyText: "",
+      composerExpanded: false,
       loading: false,
       loadingMore: false,
       error: "",
@@ -396,7 +408,222 @@
     const secondary = element("span", "tuzai-author-secondary", `@${model.author.handle || "unknown"}${compact ? ` · ${formatDate(model.createdAt, true)}` : ""}`);
     identity.append(nameRow, secondary);
     wrap.append(avatarLink, identity);
+    bindProfileHover(avatarLink, model.author, avatarLink.href);
+    bindProfileHover(name, model.author, avatarLink.href);
+    bindProfileHover(secondary, model.author, avatarLink.href);
     return wrap;
+  }
+
+  function removeProfileCard() {
+    window.clearTimeout(profileCardShowTimer);
+    window.clearTimeout(profileCardHideTimer);
+    profileCardShowTimer = null;
+    profileCardHideTimer = null;
+    activeProfileCard?.remove();
+    activeProfileCard = null;
+    activeProfileCardKey = "";
+    activeProfileAnchor = null;
+  }
+
+  function scheduleProfileCardHide() {
+    window.clearTimeout(profileCardShowTimer);
+    window.clearTimeout(profileCardHideTimer);
+    profileCardHideTimer = window.setTimeout(removeProfileCard, PROFILE_CARD_HIDE_DELAY);
+  }
+
+  function profileKey(author, href) {
+    return String(author.id || author.handle || href || "");
+  }
+
+  function updateAuthorFollowState(author, active) {
+    const nextFollowers = Math.max(0, Number(author.followers || 0) + (active ? 1 : -1));
+    const update = (model) => {
+      if (!model) return;
+      if (String(model.author?.id || "") === String(author.id || "")) {
+        model.author.viewerFollowing = active;
+        model.author.followers = nextFollowers;
+      }
+      update(model.quote);
+    };
+    [...state.ancestors, state.focal, ...state.replies].forEach(update);
+    author.viewerFollowing = active;
+    author.followers = nextFollowers;
+  }
+
+  function profileFollowButton(author, card) {
+    if (!author.id) return null;
+    const button = element("button", "tuzai-profile-card-follow");
+    button.type = "button";
+    button.append(
+      element("span", "tuzai-profile-follow-default"),
+      element("span", "tuzai-profile-follow-hover", "取消关注")
+    );
+    const refresh = () => {
+      const following = Boolean(author.viewerFollowing);
+      button.dataset.following = String(following);
+      button.querySelector(".tuzai-profile-follow-default").textContent = following ? "正在关注" : "关注";
+      button.setAttribute("aria-label", `${following ? "正在关注" : "关注"} @${author.handle || author.name || "X 用户"}`);
+      const followers = card.querySelector(".tuzai-profile-followers-count");
+      if (followers) followers.textContent = formatCount(author.followers) || "0";
+    };
+    refresh();
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (button.disabled) return;
+      const nextActive = !Boolean(author.viewerFollowing);
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      try {
+        await requestPage("TOGGLE_FOLLOW", { userId: author.id, active: nextActive });
+        updateAuthorFollowState(author, nextActive);
+        refresh();
+        notify(nextActive ? `已关注 @${author.handle}` : `已取消关注 @${author.handle}`);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "关注操作失败", "error");
+      } finally {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
+    });
+    return button;
+  }
+
+  function profileCard(author, href) {
+    const card = element("section", "tuzai-profile-card");
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-label", `${author.name || author.handle || "X 用户"} 的账号资料`);
+    const top = element("div", "tuzai-profile-card-top");
+    const avatarLink = element("a", "tuzai-profile-card-avatar");
+    avatarLink.href = href;
+    avatarLink.target = "_blank";
+    avatarLink.rel = "noreferrer";
+    if (author.avatar) {
+      const image = document.createElement("img");
+      image.src = author.avatar;
+      image.alt = author.name || author.handle || "X 用户";
+      avatarLink.append(image);
+    } else avatarLink.append(icon("ph-user"));
+    top.append(avatarLink);
+    const follow = profileFollowButton(author, card);
+    if (follow) top.append(follow);
+
+    const nameRow = element("a", "tuzai-profile-card-name");
+    nameRow.href = href;
+    nameRow.target = "_blank";
+    nameRow.rel = "noreferrer";
+    nameRow.append(element("strong", "", author.name || author.handle || "X 用户"));
+    if (author.verified) {
+      const verified = element("span", "tuzai-verified", "✓");
+      verified.setAttribute("aria-label", "认证账号");
+      nameRow.append(verified);
+    }
+    const handle = element("a", "tuzai-profile-card-handle", `@${author.handle || "unknown"}`);
+    handle.href = href;
+    handle.target = "_blank";
+    handle.rel = "noreferrer";
+    card.append(top, nameRow, handle);
+    if (author.followsViewer) card.append(element("div", "tuzai-profile-card-follows-you", "关注了你"));
+    if (author.description) card.append(element("p", "tuzai-profile-card-bio", author.description));
+
+    const stats = element("div", "tuzai-profile-card-stats");
+    const following = element("a", "");
+    following.href = `${href.replace(/\/$/, "")}/following`;
+    following.target = "_blank";
+    following.rel = "noreferrer";
+    following.append(element("strong", "", formatCount(author.followingCount) || "0"), document.createTextNode(" 正在关注"));
+    const followers = element("a", "");
+    followers.href = `${href.replace(/\/$/, "")}/verified_followers`;
+    followers.target = "_blank";
+    followers.rel = "noreferrer";
+    followers.append(element("strong", "tuzai-profile-followers-count", formatCount(author.followers) || "0"), document.createTextNode(" 关注者"));
+    stats.append(following, followers);
+    card.append(stats);
+
+    const summary = element("a", "tuzai-profile-card-summary");
+    summary.href = `https://x.com/i/grok?text=${encodeURIComponent(`请总结 @${author.handle || ""} 的个人资料`)}`;
+    summary.target = "_blank";
+    summary.rel = "noreferrer";
+    summary.append(icon("ph-sparkle"), element("span", "", "个人资料概要"));
+    card.append(summary);
+
+    card.addEventListener("pointerenter", () => {
+      window.clearTimeout(profileCardShowTimer);
+      window.clearTimeout(profileCardHideTimer);
+    });
+    card.addEventListener("pointerleave", scheduleProfileCardHide);
+    card.addEventListener("focusin", () => window.clearTimeout(profileCardHideTimer));
+    card.addEventListener("focusout", scheduleProfileCardHide);
+    return card;
+  }
+
+  function positionProfileCard(card, anchor) {
+    if (!card?.isConnected || !anchor?.isConnected) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const gap = 4;
+    const left = Math.min(Math.max(12, anchorRect.left), window.innerWidth - cardRect.width - 12);
+    const below = anchorRect.bottom + gap;
+    const top = below + cardRect.height <= window.innerHeight - 12
+      ? below
+      : Math.max(12, anchorRect.top - cardRect.height - gap);
+    card.style.left = `${left}px`;
+    card.style.top = `${top}px`;
+  }
+
+  function showProfileCard(author, href, anchor) {
+    const root = document.getElementById(ROOT_ID);
+    if (!root || !anchor.isConnected) return;
+    const key = profileKey(author, href);
+    if (activeProfileCard?.isConnected && activeProfileCardKey === key) {
+      activeProfileAnchor = anchor;
+      positionProfileCard(activeProfileCard, anchor);
+      return;
+    }
+    removeProfileCard();
+    const card = profileCard(author, href);
+    activeProfileCard = card;
+    activeProfileCardKey = key;
+    activeProfileAnchor = anchor;
+    root.append(card);
+    positionProfileCard(card, anchor);
+  }
+
+  function bindProfileHover(node, author, href) {
+    node.classList.add("tuzai-profile-trigger");
+    node.setAttribute("aria-haspopup", "dialog");
+    node.addEventListener("pointerenter", () => {
+      window.clearTimeout(profileCardHideTimer);
+      window.clearTimeout(profileCardShowTimer);
+      if (activeProfileCard?.isConnected && activeProfileCardKey === profileKey(author, href)) {
+        activeProfileAnchor = node;
+        positionProfileCard(activeProfileCard, node);
+        return;
+      }
+      profileCardShowTimer = window.setTimeout(() => showProfileCard(author, href, node), PROFILE_CARD_SHOW_DELAY);
+    });
+    node.addEventListener("pointerleave", scheduleProfileCardHide);
+    node.addEventListener("focus", () => showProfileCard(author, href, node));
+    node.addEventListener("blur", scheduleProfileCardHide);
+  }
+
+  function disconnectReplyLoadObserver() {
+    replyLoadObserver?.disconnect();
+    replyLoadObserver = null;
+  }
+
+  function observeReplyLoadSentinel(replyList, sentinel) {
+    disconnectReplyLoadObserver();
+    if (!state.cursor || state.loadingMore || typeof IntersectionObserver !== "function") return;
+    window.requestAnimationFrame(() => {
+      if (!sentinel.isConnected || !state.cursor || state.loadingMore) return;
+      replyLoadObserver = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting) || state.loadingMore) return;
+        disconnectReplyLoadObserver();
+        fetchMore();
+      }, { root: replyList, rootMargin: "0px 0px 240px", threshold: 0.01 });
+      replyLoadObserver.observe(sentinel);
+    });
   }
 
   function destroyHlsPlayers() {
@@ -735,9 +962,13 @@
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
     }
-    button.append(icon(iconName));
+    const surface = element("span", "tuzai-action-surface");
+    const iconWrap = element("span", "tuzai-action-icon");
+    iconWrap.append(icon(iconName));
+    surface.append(iconWrap);
     const formatted = formatCount(count);
-    if (formatted) button.append(element("span", "", formatted));
+    if (formatted) surface.append(element("span", "tuzai-action-count", formatted));
+    button.append(surface);
     button.addEventListener("click", () => handleAction(model, action));
     return button;
   }
@@ -898,6 +1129,7 @@
     container.replaceChildren();
     if (!state.focal) return;
     const context = element("div", "tuzai-context-row");
+    const sortGroup = element("div", "tuzai-sort-group");
     const sort = element("div", "tuzai-sort-control");
     const trigger = element("button", "tuzai-sort-trigger");
     trigger.type = "button";
@@ -910,12 +1142,15 @@
     });
     sort.append(trigger);
     renderSortMenu(sort);
+    const replyCount = formatCount(state.focal.counts.replies || state.replies.length) || "0";
+    const count = element("span", "tuzai-reply-count", `${replyCount} 条回复`);
+    sortGroup.append(sort, count);
     const quotes = element("a", "tuzai-quotes-link", "查看引用");
     quotes.href = `${state.focal.url}/quotes`;
     quotes.target = "_blank";
     quotes.rel = "noreferrer";
     quotes.append(icon("ph-caret-right"));
-    context.append(sort, quotes);
+    context.append(sortGroup, quotes);
 
     const composer = element("section", "tuzai-composer");
     const avatar = element("span", "tuzai-composer-avatar");
@@ -928,18 +1163,21 @@
     const body = element("div", "tuzai-composer-body");
     const target = state.replyTarget || state.focal;
     const label = target.id === state.focal.id ? "原帖" : `@${target.author.handle}`;
+    const expanded = state.composerExpanded || Boolean(state.replyText.trim()) || target.id !== state.focal.id;
+    composer.dataset.expanded = String(expanded);
     const targetRow = element("div", "tuzai-composer-target", `回复 ${label}`);
     if (target.id !== state.focal.id) {
       const cancel = element("button", "", "取消");
       cancel.type = "button";
       cancel.addEventListener("click", () => {
         state.replyTarget = state.focal;
+        state.composerExpanded = Boolean(state.replyText.trim());
         renderReader();
       });
       targetRow.append(cancel);
     }
     const textarea = document.createElement("textarea");
-    textarea.rows = 2;
+    textarea.rows = 1;
     textarea.maxLength = 280;
     textarea.value = state.replyText;
     textarea.placeholder = `发布你对${label}的回复`;
@@ -948,18 +1186,45 @@
     const submit = element("button", "tuzai-reply-submit", "回复");
     submit.type = "button";
     submit.disabled = !state.replyText.trim() || state.busy.has("reply");
+    const resizeTextarea = () => {
+      textarea.style.height = "auto";
+      const maxHeight = 168;
+      const height = Math.min(Math.max(textarea.scrollHeight, 28), maxHeight);
+      textarea.style.height = `${height}px`;
+      textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    };
+    textarea.addEventListener("focus", () => {
+      state.composerExpanded = true;
+      composer.dataset.expanded = "true";
+      window.requestAnimationFrame(resizeTextarea);
+    });
     textarea.addEventListener("input", () => {
       state.replyText = textarea.value;
+      state.composerExpanded = true;
+      composer.dataset.expanded = "true";
       counter.textContent = `${textarea.value.length}/280`;
       submit.disabled = !textarea.value.trim() || state.busy.has("reply");
+      resizeTextarea();
     });
     textarea.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && textarea.value.trim()) publishReply();
     });
     submit.addEventListener("click", publishReply);
+    composer.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (composer.contains(document.activeElement)) return;
+        const stillTargetsReply = (state.replyTarget || state.focal)?.id !== state.focal?.id;
+        if (textarea.value.trim() || stillTargetsReply) return;
+        state.composerExpanded = false;
+        composer.dataset.expanded = "false";
+        textarea.style.height = "28px";
+        textarea.style.overflowY = "hidden";
+      }, 0);
+    });
     body.append(targetRow, textarea, counter);
     composer.append(avatar, body, submit);
     container.append(context, composer);
+    if (expanded) window.requestAnimationFrame(resizeTextarea);
   }
 
   function renderReader() {
@@ -968,17 +1233,13 @@
     const postBody = root.querySelector(".tuzai-post-body");
     const replyTools = root.querySelector(".tuzai-reply-tools");
     const replyList = root.querySelector(".tuzai-reply-list");
-    const count = root.querySelector(".tuzai-reply-count");
-    const postTitle = root.querySelector(".tuzai-post-pane-title");
-    const postSubtitle = root.querySelector(".tuzai-post-pane-subtitle");
-    if (!postBody || !replyTools || !replyList || !count) return;
+    if (!postBody || !replyTools || !replyList) return;
     destroyHlsPlayers();
+    disconnectReplyLoadObserver();
+    removeProfileCard();
     postBody.replaceChildren();
     postBody.dataset.hasContext = String(Boolean(state.ancestors.length));
     replyList.replaceChildren();
-    count.textContent = state.focal ? formatCount(state.focal.counts.replies || state.replies.length) || "0" : "…";
-    if (postTitle) postTitle.textContent = state.ancestors.length ? "帖子线程" : "原帖";
-    if (postSubtitle) postSubtitle.textContent = state.ancestors.length ? "上文与当前回复" : "内容与基础互动";
 
     if (state.loading) {
       postBody.append(loadingState("正在加载原帖"));
@@ -1005,11 +1266,11 @@
       replies.forEach((reply) => replyList.append(renderReply(reply)));
     }
     if (state.cursor) {
-      const loadMore = element("button", "tuzai-load-more", state.loadingMore ? "正在加载…" : "加载更多评论");
-      loadMore.type = "button";
-      loadMore.disabled = state.loadingMore;
-      loadMore.addEventListener("click", () => fetchMore());
-      replyList.append(loadMore);
+      const sentinel = element("div", "tuzai-reply-load-sentinel");
+      sentinel.setAttribute("aria-label", state.loadingMore ? "正在加载更多评论" : "向下滚动加载更多评论");
+      if (state.loadingMore) sentinel.append(element("span", "tuzai-spinner"));
+      replyList.append(sentinel);
+      observeReplyLoadSentinel(replyList, sentinel);
     }
     if (state.scrollRepliesToTop) {
       state.scrollRepliesToTop = false;
@@ -1021,8 +1282,13 @@
 
   function mergeReplies(items) {
     const map = new Map(state.replies.map((reply) => [reply.id, reply]));
-    for (const reply of items) map.set(reply.id, { ...map.get(reply.id), ...reply });
+    let added = 0;
+    for (const reply of items) {
+      if (!map.has(reply.id)) added += 1;
+      map.set(reply.id, { ...map.get(reply.id), ...reply });
+    }
     state.replies = [...map.values()];
+    return added;
   }
 
   async function hydrateArticle(model) {
@@ -1071,18 +1337,29 @@
   async function fetchMore() {
     if (!state.tweetId || !state.cursor || state.loadingMore) return;
     const previousCursor = state.cursor;
+    const currentReplyList = document.getElementById(ROOT_ID)?.querySelector(".tuzai-reply-list");
+    const previousScrollTop = currentReplyList?.scrollTop || 0;
     state.loadingMore = true;
-    renderReader();
+    disconnectReplyLoadObserver();
+    const sentinel = currentReplyList?.querySelector(".tuzai-reply-load-sentinel");
+    if (sentinel) {
+      sentinel.replaceChildren(element("span", "tuzai-spinner"));
+      sentinel.setAttribute("aria-label", "正在加载更多评论");
+    }
     try {
       const json = await requestPage("READ_THREAD", { tweetId: state.tweetId, cursor: previousCursor });
       const parsed = Core.parseTweetDetail(json, state.tweetId);
-      mergeReplies(parsed.replies);
-      state.cursor = parsed.cursor && parsed.cursor !== previousCursor ? parsed.cursor : null;
+      const added = mergeReplies(parsed.replies);
+      state.cursor = Core.replyCursorAfterPage(previousCursor, parsed.cursor, added);
     } catch (error) {
       notify(error instanceof Error ? error.message : "加载更多失败", "error");
     } finally {
       state.loadingMore = false;
       renderReader();
+      window.requestAnimationFrame(() => {
+        const nextReplyList = document.getElementById(ROOT_ID)?.querySelector(".tuzai-reply-list");
+        if (nextReplyList && !state.scrollRepliesToTop) nextReplyList.scrollTop = previousScrollTop;
+      });
     }
   }
 
@@ -1105,6 +1382,7 @@
   async function handleAction(model, action) {
     if (action === "reply") {
       state.replyTarget = model;
+      state.composerExpanded = true;
       renderReader();
       document.querySelector(`#${ROOT_ID} .tuzai-composer textarea`)?.focus();
       return;
@@ -1154,6 +1432,7 @@
       target.counts.replies += 1;
       state.replyText = "";
       state.replyTarget = state.focal;
+      state.composerExpanded = false;
       notify("回复已发布到 X");
     } catch (error) {
       notify(error instanceof Error ? error.message : "回复发布失败", "error");
@@ -1184,10 +1463,11 @@
     root.id = ROOT_ID;
     root.setAttribute("role", "dialog");
     root.setAttribute("aria-modal", "true");
-    root.setAttribute("aria-label", "帖子浮层阅读器");
+    root.setAttribute("aria-label", "兔崽插件帖子阅读器");
     root.addEventListener("wheel", (event) => {
       if (!event.target.closest?.(".tuzai-scroll-area")) event.preventDefault();
     }, { passive: false });
+    root.addEventListener("scroll", () => removeProfileCard(), true);
     const backdrop = element("button", "tuzai-backdrop");
     backdrop.type = "button";
     backdrop.setAttribute("aria-label", "关闭浮层");
@@ -1195,22 +1475,18 @@
     const dialog = element("section", "tuzai-dialog");
     dialog.innerHTML = `
       <header class="tuzai-toolbar">
-        <div class="tuzai-brand"><span class="tuzai-brand-icon"></span><div><strong>帖子浮层</strong><span>主页位置已保留</span></div></div>
+        <div class="tuzai-brand"><span class="tuzai-brand-icon"></span><strong>兔崽插件</strong></div>
         <div class="tuzai-toolbar-actions"></div>
       </header>
       <div class="tuzai-reader-grid">
         <section class="tuzai-pane tuzai-post-pane">
-          <header class="tuzai-pane-header"><div><strong class="tuzai-post-pane-title">原帖</strong><span class="tuzai-post-pane-subtitle">内容与基础互动</span></div><span class="tuzai-interactive-pill">独立滚动</span></header>
           <div class="tuzai-scroll-area tuzai-post-body"></div>
         </section>
         <section class="tuzai-pane tuzai-replies-pane">
-          <header class="tuzai-pane-header"><div><strong>评论</strong><span>按 X 默认顺序</span></div><span class="tuzai-reply-count">…</span></header>
           <div class="tuzai-reply-tools"></div>
           <div class="tuzai-scroll-area tuzai-reply-list"></div>
         </section>
-      </div>
-      <footer class="tuzai-footer"><span class="tuzai-footer-privacy">数据与操作直接使用当前登录的 X 会话，不经过第三方服务器</span><span>Esc 关闭</span></footer>`;
-    dialog.querySelector(".tuzai-footer-privacy").prepend(icon("ph-lock-key"));
+      </div>`;
     const brandIcon = dialog.querySelector(".tuzai-brand-icon");
     const iconUrl = extensionUrl("icons/icon48.png");
     if (iconUrl) {
