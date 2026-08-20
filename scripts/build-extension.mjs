@@ -22,10 +22,12 @@ mkdirSync(vendorDir, { recursive: true });
 
 const hlsVendorDir = path.join(dist, "vendor", "hls");
 const hlsSource = path.join(root, "node_modules", "hls.js", "dist", "hls.min.js");
+const hlsWorkerSource = path.join(root, "node_modules", "hls.js", "dist", "hls.worker.js");
 const hlsLicense = path.join(root, "node_modules", "hls.js", "LICENSE");
-if (!existsSync(hlsSource) || !existsSync(hlsLicense)) throw new Error("Missing local hls.js dependency");
+if (!existsSync(hlsSource) || !existsSync(hlsWorkerSource) || !existsSync(hlsLicense)) throw new Error("Missing local hls.js dependency");
 mkdirSync(hlsVendorDir, { recursive: true });
 cpSync(hlsSource, path.join(hlsVendorDir, "hls.min.js"));
+cpSync(hlsWorkerSource, path.join(hlsVendorDir, "hls.worker.js"));
 cpSync(hlsLicense, path.join(hlsVendorDir, "LICENSE"));
 
 const iconSources = [

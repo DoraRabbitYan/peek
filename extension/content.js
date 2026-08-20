@@ -8,14 +8,18 @@
   const CONTENT_SOURCE = "tuzai-content";
   const PAGE_SOURCE = "tuzai-page";
   const SORTS = Object.freeze({ relevant: "相关", latest: "最新", liked: "最多喜欢" });
+  const TARGET_LANGUAGE = "zh-cn";
+  const MAX_TRANSLATION_CONCURRENCY = 2;
   const state = {
     enabled: true,
+    autoTranslate: true,
     sourceUrl: null,
     tweetId: null,
     domFallback: null,
     focal: null,
     ancestors: [],
     focusFocalOnRender: false,
+    resetPostScrollOnRender: false,
     replies: [],
     pinnedReplyIds: [],
     scrollRepliesToTop: false,
@@ -28,6 +32,7 @@
     loading: false,
     loadingMore: false,
     error: "",
+    translationSettingsOpenFor: "",
     busy: new Set(),
     currentAvatar: "",
     pageScrollX: 0,
@@ -36,8 +41,19 @@
   };
   const pendingRequests = new Map();
   const hlsInstances = new Set();
+  const videoWarmupTasks = new WeakMap();
   let requestSequence = 0;
   let replyLoadObserver = null;
+  let translationObserver = null;
+  let videoWarmupObserver = null;
+  let sharedVideoBandwidthEstimate = 0;
+  let activeTranslationCount = 0;
+  const translationCache = new Map();
+  const translationDisplay = new Map();
+  const translationQueue = [];
+  const queuedTranslations = new Set();
+  const renderedTranslationModels = new Map();
+  const quoteResolutionRequests = new Map();
   let profileCardShowTimer = null;
   let profileCardHideTimer = null;
   let activeProfileCard = null;
@@ -130,7 +146,36 @@
       .filter(Boolean);
   }
 
+  function isQuotedPostLink(node) {
+    return Boolean(node?.matches?.('[role="link"][tabindex="0"]')
+      && node.querySelector?.('[data-testid="Tweet-User-Avatar"]')
+      && node.querySelector?.('[data-testid="tweetText"], [data-testid="tweetPhoto"], [data-testid="videoPlayer"]'));
+  }
+
+  function findClickedQuoteScope(article, target) {
+    if (!(target instanceof Element)) return null;
+    let current = target;
+    while (current && current !== article) {
+      if (isQuotedPostLink(current)) return current;
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function findClickedQuotedPostUrl(article, target) {
+    const quoteScope = findClickedQuoteScope(article, target);
+    if (!quoteScope) return null;
+    const ownUrl = findPostUrl(article);
+    const directUrl = quoteScope.matches('a[href*="/status/"]')
+      ? Core.normalizePostUrl(quoteScope.getAttribute("href"), location.href)
+      : null;
+    return [directUrl, ...normalizedStatusLinks(quoteScope)]
+      .find((url) => url && url !== ownUrl) || null;
+  }
+
   function clickedPostScope(article, target, url) {
+    const quoteScope = findClickedQuoteScope(article, target);
+    if (quoteScope && url !== findPostUrl(article)) return quoteScope;
     let current = target instanceof Element ? target : article;
     while (current && current !== article) {
       const hasContent = current.querySelector?.('[data-testid="User-Name"], [data-testid="tweetText"], [data-testid="tweetPhoto"], [data-testid="videoPlayer"]');
@@ -141,12 +186,18 @@
   }
 
   function belongsToPost(node, scope, url) {
-    const nestedLink = node.closest?.('[role="link"]');
-    if (!nestedLink || nestedLink === scope || !scope.contains(nestedLink)) return true;
-    const links = normalizedStatusLinks(nestedLink);
-    const looksLikeQuotedTweet = Boolean(nestedLink.querySelector('[data-testid="User-Name"]') && nestedLink.querySelector('[data-testid="tweetText"]'));
-    if (looksLikeQuotedTweet) return links.includes(url);
-    return !links.length || links.includes(url);
+    let current = node instanceof Element ? node : node?.parentElement;
+    while (current && current !== scope) {
+      if (current.matches?.('[role="link"]')) {
+        const links = normalizedStatusLinks(current);
+        const looksLikeQuotedTweet = isQuotedPostLink(current)
+          || Boolean(current.querySelector('[data-testid="User-Name"]') && current.querySelector('[data-testid="tweetText"]'));
+        if (looksLikeQuotedTweet) return links.includes(url);
+        if (links.length && !links.includes(url)) return false;
+      }
+      current = current.parentElement;
+    }
+    return true;
   }
 
   function snapshotAttachment(scope, url) {
@@ -215,6 +266,11 @@
     const timeNode = [...scope.querySelectorAll('time[datetime]')]
       .find((node) => belongsToPost(node, scope, url));
     const verified = Boolean(userName?.querySelector('svg[aria-label*="认证"], svg[aria-label*="Verified"], [data-testid="icon-verified"]'));
+    const translationSource = [...scope.querySelectorAll("span, button")]
+      .map((node) => String(node.innerText || "").trim())
+      .find((text) => /^翻译自\s+/.test(text));
+    const showsTranslatedText = Boolean(translationSource && [...scope.querySelectorAll("button, a, span")]
+      .some((node) => String(node.innerText || "").trim() === "显示原文"));
     const media = [];
     const seenMedia = new Set();
     for (const container of scope.querySelectorAll('[data-testid="videoPlayer"], [data-testid="tweetPhoto"]')) {
@@ -260,7 +316,13 @@
       flags: { liked: false, reposted: false, bookmarked: false },
       media,
       attachment: snapshotAttachment(scope, url),
-      quote: null
+      quote: null,
+      translation: showsTranslatedText ? {
+        text: textNode?.innerText || "",
+        localizedSourceLanguage: translationSource.replace(/^翻译自\s+/, ""),
+        sourceLanguage: "",
+        destinationLanguage: TARGET_LANGUAGE
+      } : null
     };
   }
 
@@ -283,6 +345,8 @@
     const pageScrollY = state.pageScrollY;
     destroyHlsPlayers();
     disconnectReplyLoadObserver();
+    disconnectTranslationObserver();
+    clearQueuedTranslations();
     removeProfileCard();
     root?.remove();
     window.clearTimeout(state.toastTimer);
@@ -293,6 +357,7 @@
       focal: null,
       ancestors: [],
       focusFocalOnRender: false,
+      resetPostScrollOnRender: false,
       replies: [],
       pinnedReplyIds: [],
       scrollRepliesToTop: false,
@@ -305,10 +370,12 @@
       loading: false,
       loadingMore: false,
       error: "",
+      translationSettingsOpenFor: "",
       pageScrollX: 0,
       pageScrollY: 0
     });
     state.busy.clear();
+    translationDisplay.clear();
     if (restorePagePosition) {
       window.requestAnimationFrame(() => {
         window.scrollTo(pageScrollX, pageScrollY);
@@ -327,6 +394,14 @@
     dialog.append(toast);
     window.clearTimeout(state.toastTimer);
     state.toastTimer = window.setTimeout(() => toast.remove(), 2400);
+  }
+
+  function notifyPage(message) {
+    document.querySelector(".tuzai-page-notice")?.remove();
+    const notice = element("div", "tuzai-page-notice", message);
+    notice.setAttribute("role", "alert");
+    document.body.append(notice);
+    window.setTimeout(() => notice.remove(), 3600);
   }
 
   function formatCount(value) {
@@ -378,6 +453,260 @@
     container.append(document.createTextNode(text.slice(cursor)));
   }
 
+  function translationKey(model) {
+    return `${model?.id || ""}:${TARGET_LANGUAGE}`;
+  }
+
+  function shouldOfferTranslation(model) {
+    const text = String(model?.text || "")
+      .replace(/https?:\/\/\S+/g, " ")
+      .replace(/@[A-Za-z0-9_]+/g, " ")
+      .trim();
+    if (!text) return false;
+    const hanCount = (text.match(/[\u3400-\u9fff]/g) || []).length;
+    const latinCount = (text.match(/[A-Za-z\u00c0-\u024f]/g) || []).length;
+    const japaneseKoreanCount = (text.match(/[\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+    const cyrillicCount = (text.match(/[\u0400-\u04ff]/g) || []).length;
+    if (japaneseKoreanCount >= 2 || cyrillicCount >= 4) return true;
+    return latinCount >= 6 && hanCount < Math.max(4, latinCount * 0.35);
+  }
+
+  function sourceLanguageLabel(entry) {
+    if (entry?.localizedSourceLanguage) return entry.localizedSourceLanguage;
+    const language = String(entry?.sourceLanguage || "").toLowerCase();
+    return ({ en: "英语", ja: "日语", ko: "韩语", es: "西班牙语", fr: "法语", de: "德语", ru: "俄语" })[language] || "外语";
+  }
+
+  function showingTranslation(model, entry) {
+    const preference = translationDisplay.get(model.id);
+    return entry?.status === "ready" && (preference === "translation" || (state.autoTranslate && preference !== "original"));
+  }
+
+  function disconnectTranslationObserver() {
+    translationObserver?.disconnect();
+    translationObserver = null;
+  }
+
+  function clearQueuedTranslations() {
+    while (translationQueue.length) {
+      const task = translationQueue.shift();
+      const key = translationKey(task.model);
+      queuedTranslations.delete(key);
+      if (translationCache.get(key)?.status === "queued") translationCache.delete(key);
+    }
+  }
+
+  function updateTranslationNodes(tweetId) {
+    const root = document.getElementById(ROOT_ID);
+    const model = findModel(tweetId) || renderedTranslationModels.get(tweetId);
+    if (!root || !model) return;
+    for (const block of root.querySelectorAll(".tuzai-translatable")) {
+      if (block.dataset.translationId === tweetId) renderTranslationBlockContent(block, model);
+    }
+  }
+
+  function pumpTranslations() {
+    while (activeTranslationCount < MAX_TRANSLATION_CONCURRENCY && translationQueue.length) {
+      const task = translationQueue.shift();
+      const key = translationKey(task.model);
+      queuedTranslations.delete(key);
+      activeTranslationCount += 1;
+      translationCache.set(key, { status: "loading" });
+      updateTranslationNodes(task.model.id);
+      requestPage("TRANSLATE_TWEET", { tweetId: task.model.id, targetLanguage: TARGET_LANGUAGE }, 20000)
+        .then((result) => {
+          const translatedText = String(result?.text || "").trim();
+          if (!translatedText || translatedText === String(task.model.text || "").trim()) {
+            translationCache.set(key, { status: "unavailable" });
+            return;
+          }
+          translationCache.set(key, {
+            status: "ready",
+            text: translatedText,
+            sourceLanguage: String(result.sourceLanguage || ""),
+            localizedSourceLanguage: String(result.localizedSourceLanguage || ""),
+            destinationLanguage: String(result.destinationLanguage || TARGET_LANGUAGE)
+          });
+        })
+        .catch((error) => {
+          translationCache.set(key, { status: "error", message: error instanceof Error ? error.message : "翻译失败" });
+        })
+        .finally(() => {
+          activeTranslationCount -= 1;
+          updateTranslationNodes(task.model.id);
+          pumpTranslations();
+        });
+    }
+  }
+
+  function enqueueTranslation(model, priority = false, force = false) {
+    if (!shouldOfferTranslation(model)) return;
+    const key = translationKey(model);
+    const cached = translationCache.get(key);
+    if (!force && (cached?.status === "ready" || cached?.status === "queued" || cached?.status === "loading" || cached?.status === "unavailable")) return;
+    if (force) translationCache.delete(key);
+    if (queuedTranslations.has(key)) return;
+    queuedTranslations.add(key);
+    translationCache.set(key, { status: "queued" });
+    const task = { model };
+    if (priority) translationQueue.unshift(task);
+    else translationQueue.push(task);
+    updateTranslationNodes(model.id);
+    pumpTranslations();
+  }
+
+  function seedDomTranslation(model, translation) {
+    const text = String(translation?.text || "").trim();
+    if (!model?.id || !text || text === String(model.text || "").trim()) return;
+    translationCache.set(translationKey(model), {
+      status: "ready",
+      text,
+      sourceLanguage: String(translation.sourceLanguage || ""),
+      localizedSourceLanguage: String(translation.localizedSourceLanguage || ""),
+      destinationLanguage: String(translation.destinationLanguage || TARGET_LANGUAGE)
+    });
+  }
+
+  function translationSettings(model) {
+    const menu = element("div", "tuzai-translation-settings");
+    const option = element("button", "tuzai-translation-setting");
+    option.type = "button";
+    option.setAttribute("role", "switch");
+    option.setAttribute("aria-checked", String(state.autoTranslate));
+    option.append(
+      element("span", "", "自动翻译外语帖子"),
+      element("span", "tuzai-translation-switch", state.autoTranslate ? "已开启" : "已关闭")
+    );
+    option.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const enabled = !state.autoTranslate;
+      state.autoTranslate = enabled;
+      state.translationSettingsOpenFor = "";
+      if (enabled) translationDisplay.delete(model.id);
+      refreshTranslationBlocks();
+      scheduleTranslationWork();
+      try {
+        await chrome.storage.sync.set({ autoTranslate: enabled });
+        notify(enabled ? "已开启自动翻译外语帖子" : "已关闭自动翻译");
+      } catch {
+        notify("翻译设置保存失败，请重新加载插件后再试", "error");
+      }
+    });
+    menu.append(option, element("p", "", "译文由当前登录的 X 会话提供"));
+    return menu;
+  }
+
+  function closeTranslationSettingsFromOutside(event) {
+    if (!state.translationSettingsOpenFor) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest(".tuzai-translation-settings, .tuzai-translation-gear")) return;
+    state.translationSettingsOpenFor = "";
+    const root = document.getElementById(ROOT_ID);
+    root?.querySelectorAll(".tuzai-translation-settings").forEach((menu) => menu.remove());
+    root?.querySelectorAll('.tuzai-translation-gear[aria-expanded="true"]')
+      .forEach((gear) => gear.setAttribute("aria-expanded", "false"));
+  }
+
+  function renderTranslationBlockContent(block, model) {
+    const textClass = block.dataset.textClass || "";
+    const text = element("div", textClass);
+    if (!shouldOfferTranslation(model)) {
+      appendRichText(text, model);
+      block.replaceChildren(text);
+      return;
+    }
+    const entry = translationCache.get(translationKey(model));
+    const row = element("div", "tuzai-translation-row");
+    row.append(icon("ph-translate"));
+    if (entry?.status === "queued" || entry?.status === "loading") {
+      row.append(element("span", "", "正在翻译…"));
+    } else if (showingTranslation(model, entry)) {
+      row.append(element("span", "", `翻译自 ${sourceLanguageLabel(entry)}`));
+      const original = element("button", "tuzai-translation-link", "显示原文");
+      original.type = "button";
+      original.addEventListener("click", () => {
+        translationDisplay.set(model.id, "original");
+        updateTranslationNodes(model.id);
+      });
+      row.append(original);
+    } else {
+      const label = entry?.status === "error" || entry?.status === "unavailable" ? "重试翻译" : "显示翻译";
+      const translate = element("button", "tuzai-translation-link", label);
+      translate.type = "button";
+      translate.addEventListener("click", () => {
+        translationDisplay.set(model.id, "translation");
+        if (entry?.status !== "ready") enqueueTranslation(model, true, true);
+        else updateTranslationNodes(model.id);
+      });
+      row.append(translate);
+    }
+    const gear = element("button", "tuzai-translation-gear");
+    gear.type = "button";
+    gear.setAttribute("aria-label", "翻译设置");
+    gear.setAttribute("aria-expanded", String(state.translationSettingsOpenFor === model.id));
+    gear.append(icon("ph-gear"));
+    gear.addEventListener("click", () => {
+      state.translationSettingsOpenFor = state.translationSettingsOpenFor === model.id ? "" : model.id;
+      refreshTranslationBlocks();
+    });
+    row.append(gear);
+    if (showingTranslation(model, entry)) appendRichText(text, { ...model, text: entry.text, entities: [] });
+    else appendRichText(text, model);
+    block.replaceChildren(row);
+    if (state.translationSettingsOpenFor === model.id) block.append(translationSettings(model));
+    block.append(text);
+  }
+
+  function translatedTextBlock(model, textClass, scope) {
+    const block = element("div", `tuzai-translatable tuzai-translation-${scope}`);
+    renderedTranslationModels.set(model.id, model);
+    block.dataset.translationId = model.id;
+    block.dataset.translationScope = scope;
+    block.dataset.textClass = textClass;
+    renderTranslationBlockContent(block, model);
+    return block;
+  }
+
+  function refreshTranslationBlocks() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    for (const block of root.querySelectorAll(".tuzai-translatable")) {
+      const model = findModel(block.dataset.translationId) || renderedTranslationModels.get(block.dataset.translationId);
+      if (model) renderTranslationBlockContent(block, model);
+    }
+  }
+
+  function scheduleTranslationWork() {
+    disconnectTranslationObserver();
+    if (!state.autoTranslate) return;
+    const root = document.getElementById(ROOT_ID);
+    if (!root || !state.focal) return;
+    const replyList = root.querySelector(".tuzai-reply-list");
+    const blocks = [...root.querySelectorAll(".tuzai-translatable")];
+    const replyBlocks = blocks.filter((block) => String(block.dataset.translationScope || "").startsWith("reply"));
+    for (const block of blocks.filter((candidate) => !replyBlocks.includes(candidate))) {
+      const model = findModel(block.dataset.translationId) || renderedTranslationModels.get(block.dataset.translationId);
+      if (model) enqueueTranslation(model, true);
+    }
+    if (!replyBlocks.length) return;
+    if (typeof IntersectionObserver !== "function") {
+      replyBlocks.forEach((block) => {
+        const model = findModel(block.dataset.translationId) || renderedTranslationModels.get(block.dataset.translationId);
+        if (model) enqueueTranslation(model);
+      });
+      return;
+    }
+    translationObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        translationObserver?.unobserve(entry.target);
+        const model = findModel(entry.target.dataset.translationId) || renderedTranslationModels.get(entry.target.dataset.translationId);
+        if (model) enqueueTranslation(model);
+      }
+    }, { root: replyList, rootMargin: "180px 0px", threshold: 0.01 });
+    replyBlocks.forEach((block) => translationObserver.observe(block));
+  }
+
   function authorLine(model, compact = false) {
     const wrap = element("div", "tuzai-author-line");
     const avatarLink = element("a", "tuzai-avatar-link");
@@ -405,12 +734,18 @@
       verified.setAttribute("aria-label", "认证账号");
       nameRow.append(verified);
     }
-    const secondary = element("span", "tuzai-author-secondary", `@${model.author.handle || "unknown"}${compact ? ` · ${formatDate(model.createdAt, true)}` : ""}`);
+    const secondary = element("span", "tuzai-author-secondary");
+    const handle = element("a", "tuzai-author-handle", `@${model.author.handle || "unknown"}`);
+    handle.href = avatarLink.href;
+    handle.target = "_blank";
+    handle.rel = "noreferrer";
+    secondary.append(handle);
+    if (compact) secondary.append(element("span", "tuzai-author-date", ` · ${formatDate(model.createdAt, true)}`));
     identity.append(nameRow, secondary);
     wrap.append(avatarLink, identity);
     bindProfileHover(avatarLink, model.author, avatarLink.href);
     bindProfileHover(name, model.author, avatarLink.href);
-    bindProfileHover(secondary, model.author, avatarLink.href);
+    bindProfileHover(handle, model.author, avatarLink.href);
     return wrap;
   }
 
@@ -627,10 +962,51 @@
   }
 
   function destroyHlsPlayers() {
+    videoWarmupObserver?.disconnect();
+    videoWarmupObserver = null;
     for (const hls of hlsInstances) {
       try { hls.destroy(); } catch { /* Already detached. */ }
     }
     hlsInstances.clear();
+  }
+
+  function rememberVideoBandwidth(value) {
+    const estimate = Number(value) || 0;
+    if (estimate < 128000) return;
+    sharedVideoBandwidthEstimate = sharedVideoBandwidthEstimate > 0
+      ? (sharedVideoBandwidthEstimate * 0.7) + (estimate * 0.3)
+      : estimate;
+  }
+
+  function targetVideoBitrate(compact) {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const effectiveType = String(connection?.effectiveType || "");
+    if (connection?.saveData) return 384000;
+    if (/(?:^|-)2g$/.test(effectiveType)) return 512000;
+    if (effectiveType === "3g") return 1500000;
+    if (sharedVideoBandwidthEstimate > 0) {
+      return Math.max(750000, Math.min(12000000, sharedVideoBandwidthEstimate * 0.82));
+    }
+    const downlinkEstimate = Number(connection?.downlink) > 0 ? Number(connection.downlink) * 750000 : 0;
+    return Math.max(750000, Math.min(12000000, downlinkEstimate || (compact ? 2500000 : 4000000)));
+  }
+
+  function observeVideoWarmup(video, warmup, priority) {
+    videoWarmupTasks.set(video, warmup);
+    if (priority === "focal" || typeof IntersectionObserver !== "function") {
+      warmup();
+      return;
+    }
+    if (!videoWarmupObserver) {
+      videoWarmupObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          videoWarmupObserver?.unobserve(entry.target);
+          videoWarmupTasks.get(entry.target)?.();
+        }
+      }, { root: null, rootMargin: "360px 0px", threshold: 0.01 });
+    }
+    videoWarmupObserver.observe(video);
   }
 
   function videoFallback(media, model) {
@@ -652,17 +1028,15 @@
     return fallback;
   }
 
-  function playableVideo(media, model, compact, item) {
-    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    const constrained = connection?.saveData || /(?:^|-)2g$/.test(connection?.effectiveType || "");
-    const targetBitrate = constrained ? 256000 : connection?.effectiveType === "3g" ? 512000 : compact ? 512000 : 1200000;
+  function playableVideo(media, model, compact, item, priority = "nearby") {
+    const targetBitrate = targetVideoBitrate(compact);
     const variant = Core.selectVideoVariant(media.videoVariants, targetBitrate);
     const video = document.createElement("video");
     video.poster = media.url;
     video.controls = true;
     video.playsInline = true;
-    video.preload = "none";
-    video.setAttribute("fetchpriority", "low");
+    video.preload = priority === "focal" ? "auto" : "metadata";
+    video.setAttribute("fetchpriority", priority === "focal" ? "high" : "auto");
     video.addEventListener("play", () => {
       document.querySelectorAll(`#${ROOT_ID} video`).forEach((other) => {
         if (other !== video && !other.paused) other.pause();
@@ -677,6 +1051,11 @@
     if (nativeHls) {
       video.src = media.hlsUrl;
       video.dataset.streamType = "hls-native";
+      const warmup = () => {
+        video.preload = "auto";
+        video.load();
+      };
+      observeVideoWarmup(video, warmup, priority);
       return video;
     }
 
@@ -685,20 +1064,45 @@
       const hls = new HlsPlayer({
         autoStartLoad: false,
         startLevel: -1,
-        enableWorker: false,
+        testBandwidth: false,
+        enableWorker: true,
+        workerPath: chrome.runtime.getURL("vendor/hls/hls.worker.js"),
         capLevelToPlayerSize: true,
-        maxBufferLength: 15,
-        maxMaxBufferLength: 30,
+        capLevelOnFPSDrop: true,
+        maxBufferLength: priority === "focal" ? 30 : 15,
+        maxMaxBufferLength: priority === "focal" ? 45 : 30,
         backBufferLength: 10,
-        abrEwmaDefaultEstimate: targetBitrate
+        maxBufferSize: priority === "focal" ? 40 * 1000 * 1000 : 24 * 1000 * 1000,
+        lowLatencyMode: false,
+        abrEwmaDefaultEstimate: targetBitrate,
+        abrEwmaDefaultEstimateMax: 12000000
       });
       let recoveryAttempted = false;
+      let manifestParsed = false;
+      let warmupRequested = false;
       hlsInstances.add(hls);
       hls.attachMedia(video);
       hls.loadSource(media.hlsUrl);
       video.dataset.streamType = "hls-adaptive";
-      const startAdaptiveLoad = () => hls.startLoad(-1);
+      video.dataset.initialBitrate = String(Math.round(targetBitrate));
+      const startAdaptiveLoad = () => {
+        warmupRequested = true;
+        if (manifestParsed) hls.startLoad(-1);
+      };
+      observeVideoWarmup(video, startAdaptiveLoad, priority);
       video.addEventListener("play", startAdaptiveLoad);
+      hls.on(HlsPlayer.Events.MANIFEST_PARSED, () => {
+        manifestParsed = true;
+        if (warmupRequested) hls.startLoad(-1);
+      });
+      hls.on(HlsPlayer.Events.FRAG_LOADED, () => {
+        rememberVideoBandwidth(hls.bandwidthEstimate);
+        if (Number.isFinite(hls.bandwidthEstimate)) video.dataset.bandwidthEstimate = String(Math.round(hls.bandwidthEstimate));
+      });
+      hls.on(HlsPlayer.Events.LEVEL_SWITCHED, (_event, data) => {
+        const level = hls.levels?.[data?.level];
+        if (level?.height) video.dataset.quality = `${level.height}p`;
+      });
       hls.on(HlsPlayer.Events.ERROR, (_event, data) => {
         if (!data?.fatal) return;
         if (!recoveryAttempted && data.type === HlsPlayer.ErrorTypes.NETWORK_ERROR) {
@@ -718,6 +1122,7 @@
           video.src = variant?.url || media.videoUrl;
           video.dataset.bitrate = String(variant?.bitrate || "");
           video.dataset.streamType = "mp4-progressive-fallback";
+          video.preload = warmupRequested ? "auto" : "metadata";
           video.load();
         } else if (item.contains(video)) item.replaceChildren(videoFallback(media, model));
       });
@@ -728,12 +1133,17 @@
       video.src = variant?.url || media.videoUrl;
       video.dataset.bitrate = String(variant?.bitrate || "");
       video.dataset.streamType = "mp4-progressive";
+      const warmup = () => {
+        video.preload = "auto";
+        video.load();
+      };
+      observeVideoWarmup(video, warmup, priority);
       return video;
     }
     return null;
   }
 
-  function mediaGrid(model, compact = false) {
+  function mediaGrid(model, compact = false, priority = "nearby") {
     if (!model.media?.length) return null;
     const firstMedia = model.media[0];
     const singleVideo = model.media.length === 1 && (firstMedia.type === "video" || firstMedia.type === "animated_gif");
@@ -747,7 +1157,7 @@
         item.style.aspectRatio = `${width} / ${height}`;
       }
       if (isVideo) {
-        const video = playableVideo(media, model, compact, item);
+        const video = playableVideo(media, model, compact, item, priority);
         if (video) {
           const play = element("button", "tuzai-video-play");
           play.type = "button";
@@ -927,7 +1337,7 @@
     return reader;
   }
 
-  function quoteCard(model) {
+  function quoteCard(model, scope = "quote") {
     if (!model.quote) return null;
     const quote = element("section", "tuzai-quote-card");
     const quoteLink = element("a", "tuzai-quote-link");
@@ -940,11 +1350,10 @@
     heading.append(name);
     if (model.quote.author.verified) heading.append(element("span", "tuzai-verified", "✓"));
     heading.append(element("span", "", `@${model.quote.author.handle}`));
-    const text = element("div", "tuzai-quote-text");
-    appendRichText(text, model.quote);
+    const text = translatedTextBlock(model.quote, "tuzai-quote-text", scope === "reply" ? "reply-quote" : "quote");
     quoteLink.append(heading);
     quote.append(quoteLink, text);
-    const media = mediaGrid(model.quote, true);
+    const media = mediaGrid(model.quote, true, scope === "reply" ? "lazy" : "nearby");
     if (media) quote.append(media);
     const attachment = attachmentCard(model.quote, true);
     if (attachment) quote.append(attachment);
@@ -995,10 +1404,9 @@
     open.setAttribute("aria-label", "在 X 打开帖子");
     open.append(icon("ph-dots-three"));
     header.append(open);
-    const text = element("div", "tuzai-post-text");
-    appendRichText(text, model);
+    const text = translatedTextBlock(model, "tuzai-post-text", "post");
     article.append(header, text);
-    const media = mediaGrid(model);
+    const media = mediaGrid(model, false, "focal");
     if (media) article.append(media);
     const attachment = attachmentCard(model);
     if (attachment) article.append(attachment);
@@ -1023,10 +1431,9 @@
     open.setAttribute("aria-label", "在 X 打开上文帖子");
     open.append(icon("ph-dots-three"));
     header.append(open);
-    const text = element("div", "tuzai-thread-text");
-    appendRichText(text, model);
+    const text = translatedTextBlock(model, "tuzai-thread-text", "thread");
     article.append(header, text);
-    const media = mediaGrid(model, true);
+    const media = mediaGrid(model, true, "nearby");
     if (media) article.append(media);
     const attachment = attachmentCard(model, true);
     if (attachment) article.append(attachment);
@@ -1058,21 +1465,33 @@
     });
   }
 
+  function resetPostScrollOnce(postBody) {
+    if (!state.resetPostScrollOnRender) return;
+    state.resetPostScrollOnRender = false;
+    postBody.scrollTop = 0;
+    window.requestAnimationFrame(() => {
+      if (!document.getElementById(ROOT_ID) || !postBody.isConnected) return;
+      postBody.scrollTop = 0;
+      window.requestAnimationFrame(() => {
+        if (postBody.isConnected) postBody.scrollTop = 0;
+      });
+    });
+  }
+
   function renderReply(model) {
     const article = element("article", "tuzai-reply-card");
     article.dataset.tweetId = model.id;
     article.style.setProperty("--tuzai-depth", String(model.depth || 0));
     article.dataset.depth = String(model.depth || 0);
     const header = authorLine(model, true);
-    const text = element("div", "tuzai-reply-text");
-    appendRichText(text, model);
+    const text = translatedTextBlock(model, "tuzai-reply-text", "reply");
     const body = element("div", "tuzai-reply-body");
     body.append(header, text);
-    const media = mediaGrid(model, true);
+    const media = mediaGrid(model, true, "lazy");
     if (media) body.append(media);
     const attachment = attachmentCard(model, true);
     if (attachment) body.append(attachment);
-    const quote = quoteCard(model);
+    const quote = quoteCard(model, "reply");
     if (quote) body.append(quote);
     body.append(actionBar(model, true));
     article.append(body);
@@ -1237,6 +1656,7 @@
     destroyHlsPlayers();
     disconnectReplyLoadObserver();
     removeProfileCard();
+    renderedTranslationModels.clear();
     postBody.replaceChildren();
     postBody.dataset.hasContext = String(Boolean(state.ancestors.length));
     replyList.replaceChildren();
@@ -1256,6 +1676,7 @@
 
     postBody.append(renderPostThread());
     focusFocalPostOnce(postBody);
+    resetPostScrollOnce(postBody);
     renderReplyTools(replyTools);
     const replies = sortedReplies();
     if (!replies.length) {
@@ -1278,6 +1699,7 @@
         if (replyList.isConnected) replyList.scrollTop = 0;
       });
     }
+    scheduleTranslationWork();
   }
 
   function mergeReplies(items) {
@@ -1311,6 +1733,7 @@
       const parsed = Core.parseTweetDetail(json, state.tweetId);
       state.focal = Core.mergeModelFallback(parsed.focal, state.domFallback);
       if (!state.focal) throw new Error("X 返回了数据，但没有找到这条原帖");
+      seedDomTranslation(state.focal, state.domFallback?.translation);
       state.ancestors = parsed.ancestors;
       const leftModels = await Promise.all([...state.ancestors, state.focal].map(async (model) => {
         try {
@@ -1322,6 +1745,7 @@
       state.focal = leftModels.pop();
       state.ancestors = leftModels;
       state.focusFocalOnRender = state.ancestors.length > 0;
+      state.resetPostScrollOnRender = state.ancestors.length === 0;
       state.replies = parsed.replies;
       state.pinnedReplyIds = [];
       state.cursor = parsed.cursor;
@@ -1458,6 +1882,7 @@
     state.currentAvatar = findCurrentAvatar();
     state.pageScrollX = window.scrollX;
     state.pageScrollY = window.scrollY;
+    state.resetPostScrollOnRender = true;
 
     const root = element("div", `tuzai-overlay ${currentThemeClass()}`);
     root.id = ROOT_ID;
@@ -1468,6 +1893,7 @@
       if (!event.target.closest?.(".tuzai-scroll-area")) event.preventDefault();
     }, { passive: false });
     root.addEventListener("scroll", () => removeProfileCard(), true);
+    root.addEventListener("click", closeTranslationSettingsFromOutside);
     const backdrop = element("button", "tuzai-backdrop");
     backdrop.type = "button";
     backdrop.setAttribute("aria-label", "关闭浮层");
@@ -1507,18 +1933,61 @@
     fetchThread();
   }
 
+  async function resolveQuotedModel(outerUrl) {
+    const outerId = Core.postIdFromUrl(outerUrl);
+    if (!outerId) throw new Error("没有识别到外层帖子地址");
+    if (!quoteResolutionRequests.has(outerId)) {
+      const request = (async () => {
+        let outer = null;
+        try {
+          const json = await requestPage("READ_ARTICLE", { tweetId: outerId });
+          outer = Core.collectTweetModels(json).find((model) => model.id === outerId) || null;
+        } catch {
+          // TweetResultByRestId is not always ready on a freshly opened X tab.
+        }
+        if (!outer?.quote) {
+          const json = await requestPage("READ_THREAD", { tweetId: outerId });
+          outer = Core.parseTweetDetail(json, outerId).focal
+            || Core.collectTweetModels(json).find((model) => model.id === outerId)
+            || null;
+        }
+        if (!outer?.quote?.id || !outer.quote.url) throw new Error("X 暂时没有返回这条引用帖");
+        return outer.quote;
+      })().finally(() => quoteResolutionRequests.delete(outerId));
+      quoteResolutionRequests.set(outerId, request);
+    }
+    return quoteResolutionRequests.get(outerId);
+  }
+
+  async function openResolvedQuote(outerUrl) {
+    try {
+      const quote = await resolveQuotedModel(outerUrl);
+      if (document.getElementById(ROOT_ID)) return;
+      openPopover(quote.url, quote);
+    } catch (error) {
+      notifyPage(error instanceof Error ? error.message : "读取引用帖失败，请稍后重试");
+    }
+  }
+
   function handleTimelineClick(event) {
     if (!state.enabled || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    if (Core.isPostDetailUrl(location.href)) return;
     if (document.getElementById(ROOT_ID)) return;
     const article = event.target.closest?.('article[data-testid="tweet"]');
     if (!article || !isTopLevelTweet(article) || shouldSkipTarget(event.target)) return;
+    const quoteScope = findClickedQuoteScope(article, event.target);
+    const quotedUrl = findClickedQuotedPostUrl(article, event.target);
+    if (Core.isPostDetailUrl(location.href) && !quoteScope) return;
     const targetAnchor = event.target.closest?.('a[href*="/status/"]');
-    const url = Core.normalizePostUrl(targetAnchor?.getAttribute("href"), location.href) || findPostUrl(article);
-    if (!url) return;
-    const domFallback = snapshotArticle(article, event.target, url);
+    const outerUrl = findPostUrl(article);
+    const url = quotedUrl || Core.normalizePostUrl(targetAnchor?.getAttribute("href"), location.href) || outerUrl;
+    if (!url || (quoteScope && !outerUrl)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (quoteScope && !quotedUrl) {
+      void openResolvedQuote(outerUrl);
+      return;
+    }
+    const domFallback = snapshotArticle(article, event.target, url);
     openPopover(url, domFallback);
   }
 
@@ -1538,11 +2007,22 @@
       if (!state.enabled) closePopover();
     });
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "sync" || !changes.enabled) return;
-      state.enabled = Boolean(changes.enabled.newValue);
-      if (!state.enabled) closePopover();
+      if (area !== "sync") return;
+      if (changes.enabled) {
+        state.enabled = Boolean(changes.enabled.newValue);
+        if (!state.enabled) closePopover();
+      }
+      if (changes.autoTranslate) {
+        state.autoTranslate = Boolean(changes.autoTranslate.newValue);
+        state.translationSettingsOpenFor = "";
+        refreshTranslationBlocks();
+        scheduleTranslationWork();
+      }
     });
-    chrome.storage.sync.get({ enabled: true }).then(({ enabled }) => { state.enabled = Boolean(enabled); }).catch(() => {});
+    chrome.storage.sync.get({ enabled: true, autoTranslate: true }).then(({ enabled, autoTranslate }) => {
+      state.enabled = Boolean(enabled);
+      state.autoTranslate = Boolean(autoTranslate);
+    }).catch(() => {});
   } catch {
     // A stale content script after an extension reload stays inert until the X tab refreshes.
   }

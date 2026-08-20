@@ -82,13 +82,13 @@ function MockPost({ metrics, onAction }) {
       <div className="demo-post-author demo-profile-host">
         <Avatar />
         <div>
-          <strong className="demo-profile-name">兔仔研究所</strong>
+          <strong className="demo-profile-name">兔崽研究所</strong>
           <span className="demo-profile-name">@tuzai_lab · 1小时</span>
         </div>
         <button className="demo-more" aria-label="更多" onClick={() => onAction("more")}>
           <i className="ph ph-dots-three" aria-hidden="true" />
         </button>
-        <DemoProfileCard name="兔仔研究所" handle="@tuzai_lab" description="专注改进 X 上的帖子阅读和讨论体验。" />
+        <DemoProfileCard name="兔崽研究所" handle="@tuzai_lab" description="专注改进 X 上的帖子阅读和讨论体验。" />
       </div>
       <div className="demo-post-copy">
         <p>做了一个更顺手的 X 帖子阅读方式。</p>
@@ -145,7 +145,7 @@ function TimelineBackground({ onOpen }) {
         <header><strong>主页</strong><span>为你推荐</span><span>正在关注</span></header>
         <button className="demo-timeline-post" onClick={onOpen}>
           <Avatar />
-          <span><strong>兔仔研究所</strong><small>@tuzai_lab</small>点击这条帖子，在当前页面打开浮层阅读器。</span>
+          <span><strong>兔崽研究所</strong><small>@tuzai_lab</small>点击这条帖子，在当前页面打开浮层阅读器。</span>
         </button>
         {[1,2,3].map((item) => <div className="demo-skeleton-post" key={item} />)}
       </main>

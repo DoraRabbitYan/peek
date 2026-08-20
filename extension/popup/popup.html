@@ -3,23 +3,30 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>兔仔帖子浮层</title>
+    <title>兔崽插件</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="popup-card">
       <header>
         <img src="../icons/icon48.png" alt="">
-        <div><strong>兔仔帖子浮层</strong><span>双栏加载 X 原生详情页</span></div>
+        <div><strong>兔崽插件</strong><span>双栏阅读 X 帖子与评论</span></div>
       </header>
-      <label class="toggle-row">
-        <div><strong>启用浮层</strong><span>点击帖子正文时打开</span></div>
-        <input id="enabled" type="checkbox" checked>
-        <span class="toggle" aria-hidden="true"></span>
-      </label>
+      <section class="settings-list">
+        <label class="toggle-row">
+          <div><strong>启用浮层</strong><span>点击帖子正文时打开</span></div>
+          <input id="enabled" type="checkbox" checked>
+          <span class="toggle" aria-hidden="true"></span>
+        </label>
+        <label class="toggle-row">
+          <div><strong>自动翻译外语帖子</strong><span>默认显示中文，可随时看原文</span></div>
+          <input id="auto-translate" type="checkbox" checked>
+          <span class="toggle" aria-hidden="true"></span>
+        </label>
+      </section>
       <section class="privacy-note">
         <span data-phosphor-icon="shield-check" aria-hidden="true"></span>
-        <p>只在 X 页面内加载 X 原生内容；不读取 Cookie，不把帖子发送到第三方服务器。</p>
+        <p>帖子和译文只通过当前登录的 X 会话读取；不申请 Cookie 权限，也不发送到插件自己的服务器。</p>
       </section>
       <footer id="status">已开启</footer>
     </main>

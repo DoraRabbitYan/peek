@@ -7,6 +7,7 @@ header img { width: 42px; height: 42px; border-radius: 11px; }
 header div, .toggle-row div { display: grid; gap: 3px; }
 header strong { font-size: 16px; }
 header span, .toggle-row span { color: #536471; font-size: 12px; }
+.settings-list { display: grid; gap: 10px; }
 .toggle-row { position: relative; display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 15px; border: 1px solid #e4e9ec; border-radius: 14px; background: #fff; cursor: pointer; }
 .toggle-row input { position: absolute; opacity: 0; pointer-events: none; }
 .toggle { width: 42px; height: 24px; border-radius: 999px; background: #c7d0d6; transition: background .16s ease; }

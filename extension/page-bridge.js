@@ -7,6 +7,7 @@
   const CONTENT_SOURCE = "tuzai-content";
   const PAGE_SOURCE = "tuzai-page";
   const GRAPHQL_PATH = /\/graphql\/([^/]+)\/([^/?#]+)/;
+  const TRANSLATION_PATH = /\/translation\/service\/translateTweet(?:\.json)?(?:[?#]|$)/;
   const AUTH_HEADER_NAMES = new Set([
     "authorization",
     "x-twitter-auth-type",
@@ -21,7 +22,8 @@
   });
   const captured = {
     auth: Object.create(null),
-    templates: new Map()
+    templates: new Map(),
+    translationTemplate: null
   };
   const operationCache = new Map();
   let webpackRuntime = null;
@@ -48,12 +50,19 @@
 
   function rememberRequest(urlValue, methodValue, headersValue, body) {
     const url = String(urlValue || "");
-    const match = url.match(GRAPHQL_PATH);
-    if (!match) return;
     const headers = normalizeHeaders(headersValue);
     for (const [name, value] of Object.entries(headers)) {
       if (AUTH_HEADER_NAMES.has(name) && value) captured.auth[name] = value;
     }
+    if (TRANSLATION_PATH.test(url)) {
+      captured.translationTemplate = {
+        url,
+        method: String(methodValue || "GET").toUpperCase(),
+        headers
+      };
+    }
+    const match = url.match(GRAPHQL_PATH);
+    if (!match) return;
     captured.templates.set(match[2], {
       url,
       method: String(methodValue || "GET").toUpperCase(),
@@ -336,6 +345,42 @@
     }, "GET");
   }
 
+  async function translateTweet(tweetId, targetLanguage) {
+    const language = String(targetLanguage || "zh-cn").toLowerCase();
+    const fallbackPath = `/i/api/1.1/strato/column/None/tweetId=${tweetId},destinationLanguage=None,translationSource=Some(Google),feature=None,timeout=None,onlyCached=None/translation/service/translateTweet`;
+    const template = captured.translationTemplate;
+    const url = new URL(template?.url || fallbackPath, location.origin);
+    if (/tweetId=\d+/.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/tweetId=\d+/, `tweetId=${tweetId}`);
+    } else {
+      url.pathname = fallbackPath;
+    }
+    const headers = {
+      ...(template?.headers || {}),
+      ...await requestHeaders(url.pathname, "GET", false),
+      accept: "*/*",
+      "x-twitter-client-language": language
+    };
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers,
+      credentials: "include",
+      cache: "no-store"
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok || json?.errors?.length || json?.translationState === "Failed") {
+      throw new Error(json?.errors?.[0]?.message || `X 翻译请求失败（${response.status}）`);
+    }
+    const text = String(json?.translation || "").trim();
+    if (!text) throw new Error("X 暂时没有返回这条帖子的翻译");
+    return {
+      text,
+      sourceLanguage: String(json?.sourceLanguage || json?.source_language || ""),
+      localizedSourceLanguage: String(json?.localizedSourceLanguage || json?.localized_source_language || ""),
+      destinationLanguage: String(json?.destinationLanguage || json?.destination_language || language)
+    };
+  }
+
   async function toggleAction(action, tweetId, active) {
     const mapping = ACTIONS[action];
     if (!mapping) throw new Error("不支持的互动操作");
@@ -388,6 +433,7 @@
       let payload;
       if (message.type === "READ_THREAD") payload = await readThread(tweetId, message.cursor);
       else if (message.type === "READ_ARTICLE") payload = await readArticle(tweetId);
+      else if (message.type === "TRANSLATE_TWEET") payload = await translateTweet(tweetId, message.targetLanguage);
       else if (message.type === "TOGGLE_ACTION") payload = await toggleAction(message.action, tweetId, Boolean(message.active));
       else if (message.type === "CREATE_REPLY") payload = await createReply(tweetId, message.text);
       else throw new Error("未知请求");

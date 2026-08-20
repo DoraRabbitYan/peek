@@ -43,6 +43,64 @@ test("selects the source author's status link instead of a quoted status", () =>
   assert.equal(Core.postIdFromUrl("https://x.com/author/status/200/photo/1"), "200");
 });
 
+test("extracts the quoted post target from its containing tweet payload", () => {
+  const quoted = {
+    rest_id: "300",
+    core: { user_results: { result: { rest_id: "u300", legacy: { name: "Quoted", screen_name: "quoted_author" } } } },
+    legacy: {
+      id_str: "300",
+      full_text: "引用帖正文",
+      conversation_id_str: "300",
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    }
+  };
+  const outer = Core.tweetModel({
+    rest_id: "200",
+    core: { user_results: { result: { rest_id: "u200", legacy: { name: "Outer", screen_name: "outer_author" } } } },
+    legacy: {
+      id_str: "200",
+      full_text: "外层帖子",
+      conversation_id_str: "200",
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    },
+    quoted_status_result: { result: quoted }
+  });
+
+  assert.equal(outer.quote.id, "300");
+  assert.equal(outer.quote.url, "https://x.com/quoted_author/status/300");
+});
+
+test("keeps quoted-post media out of the outer post media collection", () => {
+  const quoted = {
+    rest_id: "301",
+    core: { user_results: { result: { rest_id: "u301", legacy: { name: "Quoted", screen_name: "quoted_author" } } } },
+    legacy: {
+      id_str: "301",
+      full_text: "带图片的引用帖",
+      conversation_id_str: "301",
+      entities: { urls: [], user_mentions: [], hashtags: [] },
+      extended_entities: {
+        media: [{ id_str: "quoted-image", type: "photo", media_url_https: "https://img.example/quoted.jpg" }]
+      }
+    }
+  };
+  const outer = Core.tweetModel({
+    rest_id: "201",
+    core: { user_results: { result: { rest_id: "u201", legacy: { name: "Outer", screen_name: "outer_author" } } } },
+    legacy: {
+      id_str: "201",
+      full_text: "没有图片的外层帖子",
+      conversation_id_str: "201",
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    },
+    quoted_status_result: { result: quoted }
+  });
+
+  assert.equal(outer.media.length, 0);
+  assert.equal(outer.quote.media.length, 1);
+  assert.equal(outer.quote.media[0].url, "https://img.example/quoted.jpg");
+});
+
 test("parses focal post, nested replies, media and the bottom cursor", () => {
   const user = (id, name, screenName) => ({
     rest_id: id,
@@ -396,16 +454,48 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   const content = await readFile(path.resolve("extension/content.js"), "utf8");
   const bridge = await readFile(path.resolve("extension/page-bridge.js"), "utf8");
   const styles = await readFile(path.resolve("extension/content.css"), "utf8");
+  const popup = await readFile(path.resolve("extension/popup/popup.html"), "utf8");
   assert.match(content, /READ_THREAD/);
   assert.match(content, /READ_ARTICLE/);
   assert.match(content, /CREATE_REPLY/);
   assert.match(content, /TOGGLE_ACTION/);
-  assert.match(content, /preload = "none"/);
+  assert.match(content, /TRANSLATE_TWEET/);
+  assert.match(content, /autoTranslate/);
+  assert.match(content, /MAX_TRANSLATION_CONCURRENCY = 2/);
+  assert.match(content, /显示原文/);
+  assert.match(content, /显示翻译/);
+  assert.match(content, /renderedTranslationModels/);
+  assert.match(content, /translatedTextBlock\(model\.quote, "tuzai-quote-text"/);
+  assert.match(content, /startsWith\("reply"\)/);
+  assert.match(content, /autoTranslate: true/);
+  assert.match(content, /priority === "focal" \? "auto" : "metadata"/);
+  assert.doesNotMatch(content, /preload = "none"/);
   assert.match(content, /selectVideoVariant/);
+  assert.match(content, /targetVideoBitrate/);
+  assert.match(content, /sharedVideoBandwidthEstimate/);
+  assert.match(content, /observeVideoWarmup/);
+  assert.match(content, /rootMargin: "360px 0px"/);
+  assert.match(content, /testBandwidth: false/);
+  assert.match(content, /enableWorker: true/);
+  assert.match(content, /workerPath: chrome\.runtime\.getURL\("vendor\/hls\/hls\.worker\.js"\)/);
+  assert.match(content, /abrEwmaDefaultEstimateMax: 12000000/);
   assert.match(content, /snapshotArticle/);
-  assert.match(content, /Core\.isPostDetailUrl\(location\.href\)/);
+  assert.match(content, /findClickedQuoteScope/);
+  assert.match(content, /isQuotedPostLink/);
+  assert.match(content, /\[role="link"\]\[tabindex="0"\]/);
+  assert.match(content, /findClickedQuotedPostUrl/);
+  assert.match(content, /Core\.isPostDetailUrl\(location\.href\) && !quoteScope/);
+  assert.match(content, /const url = quotedUrl/);
+  assert.match(content, /resolveQuotedModel/);
+  assert.match(content, /requestPage\("READ_ARTICLE", \{ tweetId: outerId \}\)/);
+  assert.match(content, /outer\.quote/);
+  assert.match(content, /closeTranslationSettingsFromOutside/);
+  assert.match(content, /\.tuzai-translation-settings, \.tuzai-translation-gear/);
   assert.match(content, /renderThreadAncestor/);
   assert.match(content, /focusFocalPostOnce/);
+  assert.match(content, /resetPostScrollOnce/);
+  assert.match(content, /resetPostScrollOnRender/);
+  assert.match(styles, /\.tuzai-post-body\[data-has-context="false"\]\s*\{[^}]*overflow-anchor:\s*none/);
   assert.match(content, /postBody\.scrollTop = Math\.max/);
   assert.match(content, /HlsPlayer/);
   assert.match(content, /hls-adaptive/);
@@ -424,6 +514,8 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(bridge, /CreateRetweet/);
   assert.match(bridge, /CreateBookmark/);
   assert.match(bridge, /CreateTweet/);
+  assert.match(bridge, /translation\/service\/translateTweet/);
+  assert.match(bridge, /translationSource=Some\(Google\)/);
   assert.match(bridge, /webpackChunk/);
   assert.match(bridge, /x-client-transaction-id/);
   assert.doesNotMatch(content, /<iframe|createNativeFrame|tuzaiPane/);
@@ -448,12 +540,17 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.doesNotMatch(content, /element\("span", "", "正在加载更多评论"\)/);
   assert.match(content, /tuzai-profile-card/);
   assert.match(content, /bindProfileHover/);
+  assert.match(content, /bindProfileHover\(handle, model\.author, avatarLink\.href\)/);
+  assert.doesNotMatch(content, /bindProfileHover\(secondary, model\.author, avatarLink\.href\)/);
   assert.match(content, /PROFILE_CARD_HIDE_DELAY = 650/);
   assert.match(content, /activeProfileCardKey === profileKey/);
   assert.match(content, /TOGGLE_FOLLOW/);
   assert.match(bridge, /CreateFriendship/);
   assert.match(bridge, /DestroyFriendship/);
   assert.match(styles, /width:\s*min\(300px,/);
+  assert.match(styles, /\.tuzai-avatar-link[^}]*width:\s*fit-content[^}]*height:\s*fit-content/);
+  assert.match(styles, /\.tuzai-author-secondary[^}]*width:\s*fit-content/);
+  assert.match(styles, /\.tuzai-reply-card \.tuzai-author-secondary\s*\{[^}]*flex:\s*0 1 auto/);
   assert.match(content, /tuzai-action-surface/);
   assert.match(styles, /grid-template-rows:\s*56px minmax\(0, 1fr\)/);
   assert.match(styles, /grid-template-columns:\s*minmax\(0, 1\.04fr\) minmax\(390px, 0\.96fr\)/);
@@ -469,6 +566,9 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.doesNotMatch(content, /tuzai-footer/);
   assert.doesNotMatch(bridge, /Bearer A{5,}/);
   assert.doesNotMatch(bridge, /chrome\.storage/);
+  assert.match(popup, /id="auto-translate"[^>]*checked/);
+  assert.match(popup, /自动翻译外语帖子/);
+  assert.match(styles, /\.tuzai-translation-row/);
 });
 
 test("extension build embeds official Phosphor SVG paths without a web font", async () => {
@@ -484,8 +584,11 @@ test("extension build embeds official Phosphor SVG paths without a web font", as
 test("extension build bundles hls.js locally before the reader content script", async () => {
   const manifest = JSON.parse(await readFile(path.resolve("dist-extension/manifest.json"), "utf8"));
   const hls = await readFile(path.resolve("dist-extension/vendor/hls/hls.min.js"), "utf8");
+  const worker = await readFile(path.resolve("dist-extension/vendor/hls/hls.worker.js"), "utf8");
   const license = await readFile(path.resolve("dist-extension/vendor/hls/LICENSE"), "utf8");
   assert.equal(manifest.content_scripts[1].js[1], "vendor/hls/hls.min.js");
+  assert.equal(manifest.web_accessible_resources[0].resources.includes("vendor/hls/hls.worker.js"), true);
   assert.match(hls, /Hls/);
+  assert.ok(worker.length > 100000);
   assert.match(license, /Apache License/);
 });
