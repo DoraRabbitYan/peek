@@ -147,9 +147,11 @@
   }
 
   function isQuotedPostLink(node) {
-    return Boolean(node?.matches?.('[role="link"][tabindex="0"]')
-      && node.querySelector?.('[data-testid="Tweet-User-Avatar"]')
-      && node.querySelector?.('[data-testid="tweetText"], [data-testid="tweetPhoto"], [data-testid="videoPlayer"]'));
+    const hasIdentity = node?.querySelector?.('[data-testid="Tweet-User-Avatar"], [data-testid="User-Name"]');
+    const hasQuotedContent = node?.querySelector?.(
+      '[data-testid="tweetText"], [data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="article-cover-image"]'
+    );
+    return Boolean(node?.matches?.('[role="link"][tabindex="0"]') && hasIdentity && hasQuotedContent);
   }
 
   function findClickedQuoteScope(article, target) {
@@ -294,7 +296,9 @@
         hlsUrl,
         expandedUrl: url,
         width: Number(video?.videoWidth || image?.naturalWidth) || 0,
-        height: Number(video?.videoHeight || image?.naturalHeight) || 0
+        height: Number(video?.videoHeight || image?.naturalHeight) || 0,
+        playbackWidth: Number(video?.videoWidth) || 0,
+        playbackHeight: Number(video?.videoHeight) || 0
       });
     }
     return {
@@ -970,6 +974,54 @@
     hlsInstances.clear();
   }
 
+  function videoQualityHeight(width, height, url = "", bitrate = 0, name = "") {
+    return Core.inferVideoQuality(width, height, url, bitrate, name);
+  }
+
+  function hlsLevelOptions(levels) {
+    return (levels || []).map((level, index) => {
+      const bitrate = Number(level?.maxBitrate || level?.bitrate) || 0;
+      const value = videoQualityHeight(level?.width, level?.height, level?.url, bitrate, level?.name);
+      return value ? { value, label: `${value}p`, level: index, bitrate: Number(level?.maxBitrate || level?.bitrate) || 0 } : null;
+    }).filter(Boolean).sort((left, right) => left.value - right.value || left.bitrate - right.bitrate);
+  }
+
+  function desiredAutoVideoHeight(video, media, priority) {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const effectiveType = String(connection?.effectiveType || "");
+    if (connection?.saveData || /(?:^|-)2g$/.test(effectiveType)) return 360;
+    if (effectiveType === "3g") return 480;
+    const xPlayerHint = videoQualityHeight(media.playbackWidth, media.playbackHeight);
+    if (xPlayerHint) {
+      const desktopFocalFloor = priority === "focal" && window.innerWidth >= 900 ? 720 : 0;
+      return Math.max(desktopFocalFloor, xPlayerHint);
+    }
+    if (sharedVideoBandwidthEstimate > 0) {
+      if (sharedVideoBandwidthEstimate >= 7000000) return 1080;
+      if (sharedVideoBandwidthEstimate >= 2500000) return 720;
+      if (sharedVideoBandwidthEstimate >= 1200000) return 480;
+      return 360;
+    }
+    const pixelRatio = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+    const displayedHeight = Math.round(Math.min(video.clientWidth || 0, video.clientHeight || 0) * pixelRatio);
+    if (displayedHeight >= 1080) return 1080;
+    if (displayedHeight >= 540) return 720;
+    return priority === "focal" && window.innerWidth >= 900 ? 720 : 480;
+  }
+
+  function installProgressiveVideoSource(video, media, targetBitrate, streamType) {
+    const variants = Array.isArray(media.videoVariants) ? media.videoVariants : [];
+    const variant = Core.selectVideoVariant(variants, targetBitrate)
+      || (media.videoUrl ? { url: media.videoUrl, bitrate: 0 } : null);
+    if (!variant?.url) return false;
+    video.src = variant.url;
+    video.dataset.bitrate = String(variant.bitrate || "");
+    video.dataset.streamType = streamType;
+    const quality = videoQualityHeight(variant.width, variant.height, variant.url, variant.bitrate, variant.name);
+    if (quality) video.dataset.quality = `${quality}p`;
+    return true;
+  }
+
   function rememberVideoBandwidth(value) {
     const estimate = Number(value) || 0;
     if (estimate < 128000) return;
@@ -978,17 +1030,22 @@
       : estimate;
   }
 
-  function targetVideoBitrate(compact) {
+  function targetVideoBitrate(compact, media, priority) {
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     const effectiveType = String(connection?.effectiveType || "");
     if (connection?.saveData) return 384000;
     if (/(?:^|-)2g$/.test(effectiveType)) return 512000;
     if (effectiveType === "3g") return 1500000;
+    const xPlayerHint = videoQualityHeight(media?.playbackWidth, media?.playbackHeight);
+    if (xPlayerHint >= 1080) return 8000000;
+    if (xPlayerHint >= 720) return 5000000;
+    if (xPlayerHint >= 480) return 2500000;
     if (sharedVideoBandwidthEstimate > 0) {
-      return Math.max(750000, Math.min(12000000, sharedVideoBandwidthEstimate * 0.82));
+      return Math.max(1000000, Math.min(12000000, sharedVideoBandwidthEstimate * 0.88));
     }
-    const downlinkEstimate = Number(connection?.downlink) > 0 ? Number(connection.downlink) * 750000 : 0;
-    return Math.max(750000, Math.min(12000000, downlinkEstimate || (compact ? 2500000 : 4000000)));
+    const downlinkEstimate = Number(connection?.downlink) > 0 ? Number(connection.downlink) * 850000 : 0;
+    const desktopDefault = priority === "focal" ? 6000000 : compact ? 4500000 : 5500000;
+    return Math.max(1000000, Math.min(12000000, downlinkEstimate || desktopDefault));
   }
 
   function observeVideoWarmup(video, warmup, priority) {
@@ -1029,7 +1086,7 @@
   }
 
   function playableVideo(media, model, compact, item, priority = "nearby") {
-    const targetBitrate = targetVideoBitrate(compact);
+    const targetBitrate = targetVideoBitrate(compact, media, priority);
     const variant = Core.selectVideoVariant(media.videoVariants, targetBitrate);
     const video = document.createElement("video");
     video.poster = media.url;
@@ -1047,7 +1104,13 @@
       video.muted = true;
     }
 
-    const nativeHls = media.hlsUrl && video.canPlayType("application/vnd.apple.mpegurl");
+    const HlsPlayer = globalThis.Hls;
+    const hlsJsSupported = Boolean(media.hlsUrl && HlsPlayer?.isSupported?.());
+    const nativeHls = Boolean(
+      media.hlsUrl
+      && !hlsJsSupported
+      && video.canPlayType("application/vnd.apple.mpegurl")
+    );
     if (nativeHls) {
       video.src = media.hlsUrl;
       video.dataset.streamType = "hls-native";
@@ -1059,12 +1122,11 @@
       return video;
     }
 
-    const HlsPlayer = globalThis.Hls;
-    if (media.hlsUrl && HlsPlayer?.isSupported?.()) {
+    if (hlsJsSupported) {
       const hls = new HlsPlayer({
         autoStartLoad: false,
         startLevel: -1,
-        testBandwidth: false,
+        testBandwidth: true,
         enableWorker: true,
         workerPath: chrome.runtime.getURL("vendor/hls/hls.worker.js"),
         capLevelToPlayerSize: true,
@@ -1093,6 +1155,13 @@
       video.addEventListener("play", startAdaptiveLoad);
       hls.on(HlsPlayer.Events.MANIFEST_PARSED, () => {
         manifestParsed = true;
+        const levels = hlsLevelOptions(hls.levels);
+        const desiredHeight = desiredAutoVideoHeight(video, media, priority);
+        const startOption = levels.find((level) => level.value >= desiredHeight) || levels.at(-1);
+        if (startOption) {
+          hls.startLevel = startOption.level;
+          hls.nextAutoLevel = startOption.level;
+        }
         if (warmupRequested) hls.startLoad(-1);
       });
       hls.on(HlsPlayer.Events.FRAG_LOADED, () => {
@@ -1101,7 +1170,10 @@
       });
       hls.on(HlsPlayer.Events.LEVEL_SWITCHED, (_event, data) => {
         const level = hls.levels?.[data?.level];
-        if (level?.height) video.dataset.quality = `${level.height}p`;
+        const value = videoQualityHeight(level?.width, level?.height, level?.url, level?.maxBitrate || level?.bitrate, level?.name);
+        if (value) {
+          video.dataset.quality = `${value}p`;
+        }
       });
       hls.on(HlsPlayer.Events.ERROR, (_event, data) => {
         if (!data?.fatal) return;
@@ -1119,20 +1191,15 @@
         hls.destroy();
         video.removeEventListener("play", startAdaptiveLoad);
         if (variant?.url || media.videoUrl) {
-          video.src = variant?.url || media.videoUrl;
-          video.dataset.bitrate = String(variant?.bitrate || "");
-          video.dataset.streamType = "mp4-progressive-fallback";
+          installProgressiveVideoSource(video, media, targetBitrate, "mp4-progressive-fallback");
           video.preload = warmupRequested ? "auto" : "metadata";
-          video.load();
         } else if (item.contains(video)) item.replaceChildren(videoFallback(media, model));
       });
       return video;
     }
 
     if (variant?.url || media.videoUrl) {
-      video.src = variant?.url || media.videoUrl;
-      video.dataset.bitrate = String(variant?.bitrate || "");
-      video.dataset.streamType = "mp4-progressive";
+      installProgressiveVideoSource(video, media, targetBitrate, "mp4-progressive");
       const warmup = () => {
         video.preload = "auto";
         video.load();
@@ -1914,11 +1981,16 @@
         </section>
       </div>`;
     const brandIcon = dialog.querySelector(".tuzai-brand-icon");
-    const iconUrl = extensionUrl("icons/icon48.png");
+    const iconUrl = globalThis.TuzaiBrandIconDataUrl || extensionUrl("icons/icon48.png");
     if (iconUrl) {
       const image = document.createElement("img");
       image.src = iconUrl;
       image.alt = "";
+      image.addEventListener("error", () => {
+        const fallback = element("span", "tuzai-brand-icon");
+        fallback.append(icon("ph-chat-circle"));
+        image.replaceWith(fallback);
+      }, { once: true });
       brandIcon.replaceWith(image);
     } else brandIcon.append(icon("ph-chat-circle"));
     const openOriginal = createIconButton("ph-arrow-square-out", "在 X 详情页打开");

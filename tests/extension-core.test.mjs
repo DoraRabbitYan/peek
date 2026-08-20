@@ -33,6 +33,57 @@ test("ends reply pagination when X returns no new comments or repeats a cursor",
   assert.equal(Core.replyCursorAfterPage("cursor-1", "", 3), null);
 });
 
+test("fails closed when TweetDetail omits the focal post and only returns injected recommendations", () => {
+  const recommendation = {
+    rest_id: "900",
+    core: { user_results: { result: { rest_id: "u900", legacy: { name: "Recommended", screen_name: "recommended" } } } },
+    legacy: {
+      id_str: "900",
+      full_text: "发现更多里的无关帖子",
+      conversation_id_str: "900",
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    }
+  };
+  const parsed = Core.parseTweetDetail({
+    data: {
+      threaded_conversation_with_injections_v2: {
+        instructions: [{ entries: [
+          { entryId: "tweet-900", content: { itemContent: { tweet_results: { result: recommendation } } } },
+          { entryId: "cursor-bottom", content: { cursorType: "Bottom", value: "discover-more" } }
+        ] }]
+      }
+    }
+  }, "100");
+
+  assert.equal(parsed.focal, null);
+  assert.deepEqual(Array.from(parsed.ancestors), []);
+  assert.deepEqual(Array.from(parsed.replies), []);
+  assert.equal(parsed.cursor, null);
+});
+
+test("keeps only tweets whose reply chain reaches the focal post", () => {
+  const user = (id) => ({ rest_id: `u${id}`, legacy: { name: `User ${id}`, screen_name: `user${id}` } });
+  const tweet = (id, conversationId, parent = "") => ({
+    rest_id: id,
+    core: { user_results: { result: user(id) } },
+    legacy: {
+      id_str: id,
+      full_text: `tweet ${id}`,
+      conversation_id_str: conversationId,
+      in_reply_to_status_id_str: parent,
+      entities: { urls: [], user_mentions: [], hashtags: [] }
+    }
+  });
+  const focal = tweet("100", "100");
+  const realReply = tweet("101", "100", "100");
+  const nestedReply = tweet("102", "100", "101");
+  const recommendation = tweet("900", "100");
+  const entries = [focal, realReply, nestedReply, recommendation].map((result) => ({ tweet_results: { result } }));
+  const parsed = Core.parseTweetDetail({ data: { entries } }, "100");
+
+  assert.deepEqual(Array.from(parsed.replies, (reply) => reply.id), ["101", "102"]);
+});
+
 test("selects the source author's status link instead of a quoted status", () => {
   const hrefs = [
     "/quoted/status/100/photo/1",
@@ -219,7 +270,7 @@ test("keeps current X video variants when the MIME type has parameters or bitrat
           video_info: {
             variants: [
               { content_type: "application/x-mpegURL", url: "https://video.example/master.m3u8" },
-              { content_type: "video/mp4; codecs=avc1.4d001f", url: "https://video.example/fallback.mp4" }
+              { content_type: "video/mp4; codecs=avc1.4d001f", url: "https://video.example/fallback.mp4", bitrate: 2176000, width: 1280, height: 720, name: "720p" }
             ]
           }
         }]
@@ -229,8 +280,19 @@ test("keeps current X video variants when the MIME type has parameters or bitrat
 
   assert.equal(result.media[0].type, "video");
   assert.equal(result.media[0].videoUrl, "https://video.example/fallback.mp4");
-  assert.equal(result.media[0].videoVariants[0].bitrate, 0);
+  assert.equal(result.media[0].videoVariants[0].bitrate, 2176000);
+  assert.equal(result.media[0].videoVariants[0].width, 1280);
+  assert.equal(result.media[0].videoVariants[0].height, 720);
+  assert.equal(result.media[0].videoVariants[0].name, "720p");
   assert.equal(result.media[0].hlsUrl, "https://video.example/master.m3u8");
+});
+
+test("infers automatic video quality from X dimensions, names, URLs or bitrate", () => {
+  assert.equal(Core.inferVideoQuality(1280, 720), 720);
+  assert.equal(Core.inferVideoQuality(0, 0, "https://video.twimg.com/vid/avc1/720x1280/clip.mp4"), 720);
+  assert.equal(Core.inferVideoQuality(0, 0, "", 0, "1080p"), 1080);
+  assert.equal(Core.inferVideoQuality(0, 0, "", 2176000), 720);
+  assert.equal(Core.inferVideoQuality(0, 0, "", 832000), 480);
 });
 
 test("preserves an HLS-only item as video instead of silently treating its poster as a photo", () => {
@@ -419,7 +481,7 @@ test("fills only missing author and media fields from the clicked X DOM snapshot
     text: "DOM 正文",
     createdAt: "2026-08-13T01:00:00.000Z",
     author: { id: "", name: "真实作者", handle: "source", avatar: "https://img.example/source.jpg", verified: true },
-    media: [{ type: "video", url: "https://img.example/dom-poster.jpg", videoUrl: "", videoVariants: [], hlsUrl: "", expandedUrl: "https://x.com/source/status/300" }]
+    media: [{ type: "video", url: "https://img.example/dom-poster.jpg", videoUrl: "", videoVariants: [], hlsUrl: "", expandedUrl: "https://x.com/source/status/300", playbackWidth: 1280, playbackHeight: 720 }]
   });
 
   assert.equal(merged.text, "GraphQL 正文");
@@ -431,6 +493,8 @@ test("fills only missing author and media fields from the clicked X DOM snapshot
   assert.equal(merged.media[0].type, "video");
   assert.equal(merged.media[0].url, "https://img.example/poster.jpg");
   assert.equal(merged.media[0].expandedUrl, "https://x.com/source/status/300");
+  assert.equal(merged.media[0].playbackWidth, 1280);
+  assert.equal(merged.media[0].playbackHeight, 720);
 });
 
 test("manifest keeps permissions limited to local state and X hosts", async () => {
@@ -445,9 +509,9 @@ test("manifest keeps permissions limited to local state and X hosts", async () =
   assert.equal(manifest.content_scripts[0].world, "MAIN");
   assert.equal(manifest.content_scripts[0].run_at, "document_start");
   assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
-  assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
+  assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/brand/icon.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
   assert.equal(manifest.background, undefined);
-  assert.equal(manifest.version, "0.8.4");
+  assert.equal(manifest.version, "0.8.6");
 });
 
 test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {
@@ -473,9 +537,21 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(content, /selectVideoVariant/);
   assert.match(content, /targetVideoBitrate/);
   assert.match(content, /sharedVideoBandwidthEstimate/);
+  assert.match(content, /playbackHeight/);
+  assert.match(content, /desiredAutoVideoHeight/);
+  assert.match(content, /desktopFocalFloor/);
+  assert.match(content, /Math\.max\(desktopFocalFloor, xPlayerHint\)/);
+  assert.match(content, /Core\.inferVideoQuality/);
+  assert.match(content, /hlsLevelOptions/);
+  assert.match(content, /\[data-testid="article-cover-image"\]/);
+  assert.doesNotMatch(content, /attachVideoQualityControls|tuzai-video-quality|preferredVideoQuality|视频质量/);
+  assert.doesNotMatch(styles, /\.tuzai-video-quality/);
   assert.match(content, /observeVideoWarmup/);
   assert.match(content, /rootMargin: "360px 0px"/);
-  assert.match(content, /testBandwidth: false/);
+  assert.match(content, /testBandwidth: true/);
+  assert.match(content, /const hlsJsSupported = Boolean\(media\.hlsUrl && HlsPlayer\?\.isSupported\?\.\(\)\)/);
+  assert.match(content, /&& !hlsJsSupported/);
+  assert.ok(content.indexOf("const hlsJsSupported") < content.indexOf("const nativeHls"));
   assert.match(content, /enableWorker: true/);
   assert.match(content, /workerPath: chrome\.runtime\.getURL\("vendor\/hls\/hls\.worker\.js"\)/);
   assert.match(content, /abrEwmaDefaultEstimateMax: 12000000/);
@@ -525,6 +601,7 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(styles, /\.tuzai-post-text[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
   assert.match(styles, /\.tuzai-thread-text\s*\{[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
   assert.match(content, /<strong>兔崽插件<\/strong>/);
+  assert.match(content, /globalThis\.TuzaiBrandIconDataUrl \|\| extensionUrl\("icons\/icon48\.png"\)/);
   assert.match(content, /tuzai-sort-group/);
   assert.match(content, /条回复/);
   assert.match(content, /composerExpanded/);
@@ -581,12 +658,20 @@ test("extension build embeds official Phosphor SVG paths without a web font", as
   assert.match(icons, /<path/);
 });
 
+test("extension build embeds the brand image so extension reloads cannot drop the toolbar logo", async () => {
+  const manifest = JSON.parse(await readFile(path.resolve("dist-extension/manifest.json"), "utf8"));
+  const brandIcon = await readFile(path.resolve("dist-extension/vendor/brand/icon.js"), "utf8");
+  assert.equal(manifest.content_scripts[1].js[1], "vendor/brand/icon.js");
+  assert.match(brandIcon, /globalThis\.TuzaiBrandIconDataUrl = "data:image\/png;base64,/);
+  assert.ok(brandIcon.length > 1000);
+});
+
 test("extension build bundles hls.js locally before the reader content script", async () => {
   const manifest = JSON.parse(await readFile(path.resolve("dist-extension/manifest.json"), "utf8"));
   const hls = await readFile(path.resolve("dist-extension/vendor/hls/hls.min.js"), "utf8");
   const worker = await readFile(path.resolve("dist-extension/vendor/hls/hls.worker.js"), "utf8");
   const license = await readFile(path.resolve("dist-extension/vendor/hls/LICENSE"), "utf8");
-  assert.equal(manifest.content_scripts[1].js[1], "vendor/hls/hls.min.js");
+  assert.equal(manifest.content_scripts[1].js[2], "vendor/hls/hls.min.js");
   assert.equal(manifest.web_accessible_resources[0].resources.includes("vendor/hls/hls.worker.js"), true);
   assert.match(hls, /Hls/);
   assert.ok(worker.length > 100000);

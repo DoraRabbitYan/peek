@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "兔崽插件 · X 帖子浮层阅读器",
   "short_name": "兔崽插件",
-  "version": "0.8.4",
+  "version": "0.8.6",
   "description": "在 X 时间线用双栏浮层阅读原帖与评论，并完成基础互动和纯文字回复。",
   "permissions": ["storage"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
@@ -32,7 +32,7 @@
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
       "css": ["content.css"],
-      "js": ["vendor/phosphor/icons.js", "vendor/hls/hls.min.js", "core.js", "content.js"],
+      "js": ["vendor/phosphor/icons.js", "vendor/brand/icon.js", "vendor/hls/hls.min.js", "core.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

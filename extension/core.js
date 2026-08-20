@@ -82,7 +82,7 @@
   function selectVideoVariant(variants, targetBitrate = 1200000) {
     const candidates = (variants || [])
       .filter((variant) => variant?.url)
-      .map((variant) => ({ url: String(variant.url), bitrate: numberValue(variant.bitrate) }))
+      .map((variant) => ({ ...variant, url: String(variant.url), bitrate: numberValue(variant.bitrate) }))
       .sort((left, right) => {
         if (left.bitrate > 0 && right.bitrate <= 0) return -1;
         if (left.bitrate <= 0 && right.bitrate > 0) return 1;
@@ -93,6 +93,24 @@
     if (!measured.length) return candidates[0];
     const withinTarget = measured.filter((variant) => variant.bitrate <= targetBitrate);
     return withinTarget.at(-1) || measured[0];
+  }
+
+  function inferVideoQuality(width, height, url = "", bitrate = 0, name = "") {
+    const parsedWidth = numberValue(width);
+    const parsedHeight = numberValue(height);
+    if (parsedWidth > 0 && parsedHeight > 0) return Math.min(parsedWidth, parsedHeight);
+    let decodedUrl = String(url || "");
+    try { decodedUrl = decodeURIComponent(decodedUrl); } catch { /* The raw URL is still searchable. */ }
+    const sizeMatch = decodedUrl.match(/(\d{2,5})x(\d{2,5})/i);
+    if (sizeMatch) return Math.min(Number(sizeMatch[1]), Number(sizeMatch[2]));
+    const namedQuality = String(name || "").match(/(?:^|\D)(\d{3,4})p(?:\D|$)/i);
+    if (namedQuality) return Number(namedQuality[1]);
+    const measuredBitrate = numberValue(bitrate);
+    if (!measuredBitrate) return 0;
+    if (measuredBitrate <= 450000) return 320;
+    if (measuredBitrate <= 1200000) return 480;
+    if (measuredBitrate <= 3500000) return 720;
+    return 1080;
   }
 
   function entityRanges(entitySet) {
@@ -170,7 +188,13 @@
           const url = String(variant.url || "");
           return contentType.startsWith("video/mp4") || /\.mp4(?:\?|$)/i.test(url);
         })
-        .map((variant) => ({ url: String(variant.url), bitrate: numberValue(variant.bitrate) }))
+        .map((variant) => ({
+          url: String(variant.url),
+          bitrate: numberValue(variant.bitrate),
+          width: numberValue(variant.width ?? variant.resolution?.width),
+          height: numberValue(variant.height ?? variant.resolution?.height),
+          name: String(variant.name || variant.quality || variant.resolution?.name || "")
+        }))
         .sort((left, right) => left.bitrate - right.bitrate);
       const hlsVariant = uniqueVariants.find((variant) => {
         const contentType = String(variant.content_type || variant.contentType || "").toLowerCase();
@@ -485,7 +509,9 @@
           hlsUrl: item.hlsUrl || supplement.hlsUrl || "",
           expandedUrl: item.expandedUrl || supplement.expandedUrl || fallback.url || model.url || "",
           width: item.width || supplement.width || 0,
-          height: item.height || supplement.height || 0
+          height: item.height || supplement.height || 0,
+          playbackWidth: supplement.playbackWidth || item.playbackWidth || 0,
+          playbackHeight: supplement.playbackHeight || item.playbackHeight || 0
         };
       })
       : fallbackMedia;
@@ -584,24 +610,27 @@
     const byId = new Map(models.map((model) => [model.id, model]));
     const focal = byId.get(focalId) || null;
 
+    // TweetDetail responses may append a “Discover more” recommendation module.
+    // If X omitted the requested focal tweet, there is no trustworthy conversation
+    // boundary, so fail closed instead of treating every injected tweet as a reply.
+    if (!focal) return { focal: null, ancestors: [], replies: [], cursor: null };
+
     const ancestors = [];
-    if (focal) {
-      const visited = new Set([focalId]);
-      let parentId = focal.inReplyToId;
-      while (parentId && byId.has(parentId) && !visited.has(parentId)) {
-        visited.add(parentId);
-        const parent = byId.get(parentId);
-        ancestors.unshift(parent);
-        parentId = parent.inReplyToId;
-      }
-      const conversationRoot = byId.get(focal.conversationId);
-      if (conversationRoot && conversationRoot.id !== focalId && !ancestors.some((model) => model.id === conversationRoot.id)) {
-        ancestors.unshift(conversationRoot);
-      }
+    const visited = new Set([focalId]);
+    let parentId = focal.inReplyToId;
+    while (parentId && byId.has(parentId) && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = byId.get(parentId);
+      ancestors.unshift(parent);
+      parentId = parent.inReplyToId;
+    }
+    const conversationRoot = byId.get(focal.conversationId);
+    if (conversationRoot && conversationRoot.id !== focalId && !ancestors.some((model) => model.id === conversationRoot.id)) {
+      ancestors.unshift(conversationRoot);
     }
 
     function descendsFromFocal(model) {
-      if (!focal || !model || model.id === focalId) return false;
+      if (!model || model.id === focalId) return false;
       if (model.inReplyToId === focalId) return true;
       const visited = new Set([model.id]);
       let parentId = model.inReplyToId;
@@ -610,10 +639,10 @@
         visited.add(parentId);
         parentId = byId.get(parentId)?.inReplyToId || "";
       }
-      return model.conversationId === focalId;
+      return false;
     }
 
-    const replies = models.filter((model) => focal ? descendsFromFocal(model) : model.id !== focalId);
+    const replies = models.filter(descendsFromFocal);
     for (const reply of replies) {
       let depth = 0;
       let parentId = reply.inReplyToId;
@@ -636,6 +665,7 @@
     profileHandle,
     selectOwnPostUrl,
     selectVideoVariant,
+    inferVideoQuality,
     tweetModel,
     mergeModelFallback,
     collectTweetModels,

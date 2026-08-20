@@ -55,6 +55,14 @@ writeFileSync(
   `globalThis.TuzaiPhosphorIcons = Object.freeze(${JSON.stringify(iconPaths)});\n`
 );
 
+const brandVendorDir = path.join(dist, "vendor", "brand");
+const inlineBrandIcon = await sharp(asset).resize(48, 48, { fit: "cover" }).png().toBuffer();
+mkdirSync(brandVendorDir, { recursive: true });
+writeFileSync(
+  path.join(brandVendorDir, "icon.js"),
+  `globalThis.TuzaiBrandIconDataUrl = ${JSON.stringify(`data:image/png;base64,${inlineBrandIcon.toString("base64")}`)};\n`
+);
+
 const iconDir = path.join(dist, "icons");
 mkdirSync(iconDir, { recursive: true });
 for (const size of [16, 32, 48, 128]) {
