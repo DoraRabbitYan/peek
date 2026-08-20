@@ -304,7 +304,7 @@ export function App() {
                   </div>
                   <section className="tuzai-composer" data-expanded={composerExpanded || Boolean(replyText.trim()) || replyTarget !== "原帖"} data-target-url="https://x.com/tuzai_lab/status/2087155564904370681" onFocus={() => { setComposerExpanded(true); window.requestAnimationFrame(() => resizeReplyInput()); }}>
                     <img className="tuzai-composer-avatar" src="/assets/tino-avatar.png" alt="" />
-                    <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea ref={replyInput} rows="1" maxLength="280" value={replyText} onChange={(event) => { setReplyText(event.target.value); setComposerExpanded(true); resizeReplyInput(event.target); }} onBlur={(event) => collapseReplyComposer(event.currentTarget.closest(".tuzai-composer"))} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /><span className="tuzai-composer-count">{replyText.length}/280</span></div>
+                    <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea ref={replyInput} rows="1" value={replyText} onChange={(event) => { setReplyText(event.target.value); setComposerExpanded(true); resizeReplyInput(event.target); }} onBlur={(event) => collapseReplyComposer(event.currentTarget.closest(".tuzai-composer"))} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /></div>
                     <button className="tuzai-reply-submit" type="button" disabled={!replyText.trim()} onClick={publishReply}>回复</button>
                   </section>
                 </div>

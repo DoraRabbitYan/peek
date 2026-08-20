@@ -395,7 +395,7 @@
 
   async function createReply(tweetId, text) {
     const replyText = String(text || "").trim();
-    if (!replyText || replyText.length > 280) throw new Error("回复内容需要在 1 到 280 个字符之间");
+    if (!replyText) throw new Error("回复内容不能为空");
     return graphql("CreateTweet", {
       tweet_text: replyText,
       dark_request: false,

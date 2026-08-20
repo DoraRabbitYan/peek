@@ -22,11 +22,11 @@ The current signed-in X home page was also inspected with its native author hove
 ## Verified implementation
 
 - Global toolbar: reduced from 72 px to 56 px on desktop and 54 px on narrow mobile layouts. It contains only the rabbit icon, exact title `兔崽插件`, open-in-X, and close controls.
-- Collapsed composer: measured at 58 px after the transition settles. Reply-target text and character count are hidden; the avatar, single-line placeholder, and reply button remain.
-- Focused composer: measured at 92 px. Reply-target text and the `0/280` counter appear without adding media controls.
+- Collapsed composer: measured at 58 px after the transition settles. Reply-target text is hidden; the avatar, single-line placeholder, and reply button remain.
+- Focused composer: measured at 92 px. Reply-target text appears without adding a character counter or media controls.
 - Multiline composer: four lines increased the component to 164 px and the textarea to 100 px.
 - Height cap: the textarea stops at 168 px and switches to its own vertical scrolling, preventing the composer from consuming the reply pane.
-- Empty blur behavior: after clearing the text and moving focus outside, the composer returned to 58 px and hid the target/count rows.
+- Empty blur behavior: after clearing the text and moving focus outside, the composer returned to 58 px and hid the target row.
 - Pane structure: no pane headings, explanatory subtitles, independent-scroll pills, or bottom status/footer bar are present. Both content panes remain independently scrollable.
 - Article typography: full article paragraphs use the same 15 px / 20 px reading density as ordinary post content; article headings retain only a small hierarchy instead of the previous oversized presentation.
 - Reply pagination: the manual `加载更多评论` action is gone. A one-pixel sentinel requests the next GraphQL page when it approaches the bottom of the reply pane, and the existing reading position is restored after rendering the appended page. If a response contributes zero new reply IDs, repeats the cursor, or omits a next cursor, pagination becomes terminal and the sentinel is removed instead of showing another loading state.

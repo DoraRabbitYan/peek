@@ -511,7 +511,7 @@ test("manifest keeps permissions limited to local state and X hosts", async () =
   assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
   assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/brand/icon.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
   assert.equal(manifest.background, undefined);
-  assert.equal(manifest.version, "0.8.6");
+  assert.equal(manifest.version, "0.8.7");
 });
 
 test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {
@@ -607,6 +607,8 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(content, /composerExpanded/);
   assert.match(content, /composer\.dataset\.expanded/);
   assert.match(content, /Math\.min\(Math\.max\(textarea\.scrollHeight, 28\), maxHeight\)/);
+  assert.doesNotMatch(content, /textarea\.maxLength\s*=\s*280|tuzai-composer-count|\/280/);
+  assert.doesNotMatch(bridge, /replyText\.length\s*>\s*280|1 到 280 个字符/);
   assert.match(content, /IntersectionObserver/);
   assert.match(content, /tuzai-reply-load-sentinel/);
   assert.doesNotMatch(content, /element\("button", "tuzai-load-more"/);

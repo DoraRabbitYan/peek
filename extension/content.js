@@ -1664,11 +1664,9 @@
     }
     const textarea = document.createElement("textarea");
     textarea.rows = 1;
-    textarea.maxLength = 280;
     textarea.value = state.replyText;
     textarea.placeholder = `发布你对${label}的回复`;
     textarea.setAttribute("aria-label", "发布你的回复");
-    const counter = element("span", "tuzai-composer-count", `${state.replyText.length}/280`);
     const submit = element("button", "tuzai-reply-submit", "回复");
     submit.type = "button";
     submit.disabled = !state.replyText.trim() || state.busy.has("reply");
@@ -1688,7 +1686,6 @@
       state.replyText = textarea.value;
       state.composerExpanded = true;
       composer.dataset.expanded = "true";
-      counter.textContent = `${textarea.value.length}/280`;
       submit.disabled = !textarea.value.trim() || state.busy.has("reply");
       resizeTextarea();
     });
@@ -1707,7 +1704,7 @@
         textarea.style.overflowY = "hidden";
       }, 0);
     });
-    body.append(targetRow, textarea, counter);
+    body.append(targetRow, textarea);
     composer.append(avatar, body, submit);
     container.append(context, composer);
     if (expanded) window.requestAnimationFrame(resizeTextarea);
