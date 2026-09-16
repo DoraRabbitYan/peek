@@ -422,7 +422,10 @@
     if (!response.ok || json?.errors?.length) {
       throw new Error(json?.errors?.[0]?.message || `X 关注请求失败（${response.status}）`);
     }
-    if (String(json?.id_str || "") !== userId || typeof json?.following !== "boolean"
+    // X's current REST user normalizer accepts a string `id` as well as legacy
+    // `id_str`. Never coerce a numeric snowflake: it may already be rounded.
+    const returnedUserId = typeof json?.id === "string" ? json.id : json?.id_str;
+    if (returnedUserId !== userId || typeof json?.following !== "boolean"
       || (active ? !json.following && !json.follow_request_sent : json.following)) {
       throw new Error("X 未确认关注状态，请在 X 个人资料页核对后重试");
     }

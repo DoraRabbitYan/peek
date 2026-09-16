@@ -76,3 +76,8 @@ final result: passed
 - 自动化验证：`npm test`，包含 `tests/follow.test.mjs`。真实账号关系变更的验收结果应与模拟请求测试区分。
 - 当日已在 Chrome 真实 X 浮层复现旧版提示“当前 X 页面尚未加载 CreateFriendship 操作，请刷新页面后重试”。核对页面实际加载的公开脚本 `https://abs.twimg.com/responsive-web/client-web/main.710ddeaeedc4aefda.js`，其中 `follow` / `unfollow` 分别调用 `friendships/create` / `friendships/destroy` 并传入 `user_id`。
 - Windows / Node 环境构建和测试通过；Vite 本地预览已打开。修复版真实会话验收待重新加载扩展后进行：自动化浏览器禁止访问 `chrome://extensions/`，因此扩展重新加载需要用户操作。
+# v0.8.9 状态校验补充（2026-09-16）
+
+- 用户反馈新版出现“X 未确认关注状态”；只读核对其截图所示作者的 X 原生个人资料页，关系按钮已显示“正在关注”。没有再次操作该作者的关注关系。
+- 核对同一份 X 公开网页脚本的 REST 用户归一化逻辑：用户 ID 优先接受字符串 `id`，否则使用 `id_str`。v0.8.8 仅识别后者，是已确认的兼容缺陷；未采集用户那次请求的原始响应，不能据此断言该次响应的完整字段。
+- 新增字符串 `id` 的关注和取消关注测试，两项在修复前失败，修复后通过；另验证数字长 ID 不被误接受。新构建 v0.8.9 仍需要用户重新加载扩展并刷新 X 后做真实操作验收。

@@ -511,7 +511,7 @@ test("manifest keeps permissions limited to local state and X hosts", async () =
   assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
   assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/brand/icon.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
   assert.equal(manifest.background, undefined);
-  assert.equal(manifest.version, "0.8.8");
+  assert.equal(manifest.version, "0.8.9");
 });
 
 test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {

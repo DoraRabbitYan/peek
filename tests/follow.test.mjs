@@ -63,6 +63,24 @@ test("private account returns pending instead of a completed follow", async () =
   assert.equal(reply.payload.followRequestSent, true);
 });
 
+for (const active of [true, false]) {
+  test(`accepts current X string id on ${active ? "follow" : "unfollow"} without losing precision`, async () => {
+    const userId = "2029352230424649728";
+    const h = await bridgeHarness({ body: { id: userId, following: active, followers_count: 42 } });
+    const reply = await h.follow(active, userId);
+    assert.equal(reply.ok, true);
+    assert.equal(reply.payload.following, active);
+    assert.equal(h.requests.length, 1);
+    assert.equal(new URLSearchParams(h.requests[0].body).get("user_id"), userId);
+  });
+}
+
+test("a rounded numeric id must not be mistaken for the requested account", async () => {
+  const userId = "2029352230424649728";
+  const h = await bridgeHarness({ body: { id: Number(userId), following: true } });
+  assert.equal((await h.follow(true, userId)).ok, false);
+});
+
 for (const [name, options] of [
   ["HTTP failure", { status: 403, body: { errors: [{ message: "Account restricted" }] } }],
   ["API error in HTTP 200", { body: { errors: [{ message: "Rate limited" }] } }],
