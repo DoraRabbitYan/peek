@@ -68,3 +68,11 @@ No actionable P0, P1, or P2 issue remains for this iteration.
 - Post-fix evidence: the browser-measured like surface is 40 px high, expands with its count, and the count's full bounding box remains inside the rounded hover surface. `docs/qa-action-hover-count-comparison.jpg` shows the before state on the left and the corrected state on the right.
 
 final result: passed
+# v0.8.8 关注修复验收（2026-09-16）
+
+- 在时间线打开浮层，聚焦作者资料卡；点击关注不得再报 GraphQL 操作未加载。
+- 关注、取消关注以 X 返回的状态为准，同一作者的帖子/回复/引用同步更新；失败时保持原状态，按钮恢复可用。
+- 私密账号待批准显示“已请求”，粉丝数不提前增加；在 X 个人资料页管理待批准请求。
+- 自动化验证：`npm test`，包含 `tests/follow.test.mjs`。真实账号关系变更的验收结果应与模拟请求测试区分。
+- 当日已在 Chrome 真实 X 浮层复现旧版提示“当前 X 页面尚未加载 CreateFriendship 操作，请刷新页面后重试”。核对页面实际加载的公开脚本 `https://abs.twimg.com/responsive-web/client-web/main.710ddeaeedc4aefda.js`，其中 `follow` / `unfollow` 分别调用 `friendships/create` / `friendships/destroy` 并传入 `user_id`。
+- Windows / Node 环境构建和测试通过；Vite 本地预览已打开。修复版真实会话验收待重新加载扩展后进行：自动化浏览器禁止访问 `chrome://extensions/`，因此扩展重新加载需要用户操作。

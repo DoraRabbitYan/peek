@@ -406,8 +406,31 @@
     });
   }
 
-  function toggleFollow(userId, active) {
-    return graphql(active ? "CreateFriendship" : "DestroyFriendship", { user_id: userId });
+  async function toggleFollow(userId, active) {
+    // X Web uses REST for friendships; these are not GraphQL operations.
+    const path = `/i/api/1.1/friendships/${active ? "create" : "destroy"}.json`;
+    const headers = await requestHeaders(path, "POST", true);
+    headers["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+    const response = await fetch(path, {
+      method: "POST",
+      headers,
+      credentials: "include",
+      cache: "no-store",
+      body: new URLSearchParams({ user_id: userId }).toString()
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok || json?.errors?.length) {
+      throw new Error(json?.errors?.[0]?.message || `X 关注请求失败（${response.status}）`);
+    }
+    if (String(json?.id_str || "") !== userId || typeof json?.following !== "boolean"
+      || (active ? !json.following && !json.follow_request_sent : json.following)) {
+      throw new Error("X 未确认关注状态，请在 X 个人资料页核对后重试");
+    }
+    return {
+      following: json.following,
+      followRequestSent: Boolean(json.follow_request_sent),
+      followers: Number.isFinite(json.followers_count) ? json.followers_count : null
+    };
   }
 
   function respond(requestId, ok, payload) {

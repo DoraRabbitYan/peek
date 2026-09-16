@@ -774,18 +774,22 @@
     return String(author.id || author.handle || href || "");
   }
 
-  function updateAuthorFollowState(author, active) {
-    const nextFollowers = Math.max(0, Number(author.followers || 0) + (active ? 1 : -1));
+  function updateAuthorFollowState(author, result) {
+    const active = result.following;
+    const nextFollowers = Number.isFinite(result.followers) ? result.followers
+      : Math.max(0, Number(author.followers || 0) + Number(active) - Number(Boolean(author.viewerFollowing)));
     const update = (model) => {
       if (!model) return;
       if (String(model.author?.id || "") === String(author.id || "")) {
         model.author.viewerFollowing = active;
+        model.author.followRequestSent = result.followRequestSent;
         model.author.followers = nextFollowers;
       }
       update(model.quote);
     };
     [...state.ancestors, state.focal, ...state.replies].forEach(update);
     author.viewerFollowing = active;
+    author.followRequestSent = result.followRequestSent;
     author.followers = nextFollowers;
   }
 
@@ -799,9 +803,13 @@
     );
     const refresh = () => {
       const following = Boolean(author.viewerFollowing);
+      const pending = !following && Boolean(author.followRequestSent);
+      const label = following ? "正在关注" : pending ? "已请求" : "关注";
       button.dataset.following = String(following);
-      button.querySelector(".tuzai-profile-follow-default").textContent = following ? "正在关注" : "关注";
-      button.setAttribute("aria-label", `${following ? "正在关注" : "关注"} @${author.handle || author.name || "X 用户"}`);
+      button.disabled = pending;
+      button.title = pending ? "关注请求待批准，可在 X 个人资料页管理" : "";
+      button.querySelector(".tuzai-profile-follow-default").textContent = label;
+      button.setAttribute("aria-label", `${label} @${author.handle || author.name || "X 用户"}`);
       const followers = card.querySelector(".tuzai-profile-followers-count");
       if (followers) followers.textContent = formatCount(author.followers) || "0";
     };
@@ -814,15 +822,17 @@
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
       try {
-        await requestPage("TOGGLE_FOLLOW", { userId: author.id, active: nextActive });
-        updateAuthorFollowState(author, nextActive);
+        const result = await requestPage("TOGGLE_FOLLOW", { userId: author.id, active: nextActive });
+        updateAuthorFollowState(author, result);
         refresh();
-        notify(nextActive ? `已关注 @${author.handle}` : `已取消关注 @${author.handle}`);
+        notify(result.following ? `已关注 @${author.handle}`
+          : result.followRequestSent ? `已发送关注请求 @${author.handle}` : `已取消关注 @${author.handle}`);
       } catch (error) {
         notify(error instanceof Error ? error.message : "关注操作失败", "error");
       } finally {
         button.disabled = false;
         button.removeAttribute("aria-busy");
+        refresh();
       }
     });
     return button;

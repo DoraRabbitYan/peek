@@ -462,6 +462,7 @@
         followers: numberValue(userLegacy.followers_count ?? user?.relationship_counts?.followers_count ?? user?.relationship_counts?.followers),
         followingCount: numberValue(userLegacy.friends_count ?? user?.relationship_counts?.following_count ?? user?.relationship_counts?.following),
         viewerFollowing: Boolean(userLegacy.following || user?.relationship_perspectives?.following),
+        followRequestSent: Boolean(userLegacy.follow_request_sent || user?.relationship_perspectives?.follow_request_sent),
         followsViewer: Boolean(userLegacy.followed_by || user?.relationship_perspectives?.followed_by)
       },
       createdAt: legacy.created_at || "",
@@ -545,6 +546,7 @@
         followers: author.followers || fallbackAuthor.followers || 0,
         followingCount: author.followingCount || fallbackAuthor.followingCount || 0,
         viewerFollowing: Boolean(author.viewerFollowing || fallbackAuthor.viewerFollowing),
+        followRequestSent: Boolean(author.followRequestSent || fallbackAuthor.followRequestSent),
         followsViewer: Boolean(author.followsViewer || fallbackAuthor.followsViewer)
       },
       media,

@@ -511,7 +511,7 @@ test("manifest keeps permissions limited to local state and X hosts", async () =
   assert.deepEqual(manifest.content_scripts[1].css, ["content.css"]);
   assert.deepEqual(manifest.content_scripts[1].js, ["vendor/phosphor/icons.js", "vendor/brand/icon.js", "vendor/hls/hls.min.js", "core.js", "content.js"]);
   assert.equal(manifest.background, undefined);
-  assert.equal(manifest.version, "0.8.7");
+  assert.equal(manifest.version, "0.8.8");
 });
 
 test("reader uses the page data bridge without frames, hidden tabs or cloned X DOM", async () => {
@@ -624,8 +624,8 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(content, /PROFILE_CARD_HIDE_DELAY = 650/);
   assert.match(content, /activeProfileCardKey === profileKey/);
   assert.match(content, /TOGGLE_FOLLOW/);
-  assert.match(bridge, /CreateFriendship/);
-  assert.match(bridge, /DestroyFriendship/);
+  assert.match(bridge, /friendships/);
+  assert.doesNotMatch(bridge, /graphql\(active \? "CreateFriendship"/);
   assert.match(styles, /width:\s*min\(300px,/);
   assert.match(styles, /\.tuzai-avatar-link[^}]*width:\s*fit-content[^}]*height:\s*fit-content/);
   assert.match(styles, /\.tuzai-author-secondary[^}]*width:\s*fit-content/);
