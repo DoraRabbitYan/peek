@@ -260,7 +260,7 @@
     return headers;
   }
 
-  async function graphql(operationName, variables, method = "POST") {
+  async function graphql(operationName, variables, method = "POST", signal) {
     const operation = findOperation(operationName);
     if (!operation) throw new Error(`当前 X 页面尚未加载 ${operationName} 操作，请刷新页面后重试`);
     const path = `/i/api/graphql/${operation.queryId}/${operationName}`;
@@ -273,7 +273,7 @@
       url.searchParams.set("variables", JSON.stringify(variables));
       url.searchParams.set("features", JSON.stringify(features));
       url.searchParams.set("fieldToggles", JSON.stringify(fieldToggles));
-      response = await fetch(url.toString(), { method, headers, credentials: "include", cache: "no-store" });
+      response = await fetch(url.toString(), { method, headers, credentials: "include", cache: "no-store", signal });
     } else {
       response = await fetch(path, {
         method,
@@ -406,6 +406,22 @@
     });
   }
 
+  function followStateFromUser(user, userId) {
+    const id = user?.rest_id || user?.id_str || (typeof user?.id === "string" ? user.id : null);
+    if (id !== userId) return null;
+    const relationship = user.relationship_perspectives || user.legacy || user;
+    const following = relationship.following;
+    const pending = relationship.follow_request_sent;
+    if (typeof following !== "boolean" && pending !== true) return null;
+    const followers = user.relationship_counts?.followers_count ?? user.legacy?.followers_count ?? user.followers_count;
+    return {
+      confirmed: true,
+      following: following === true,
+      followRequestSent: pending === true,
+      followers: Number.isFinite(followers) ? followers : null
+    };
+  }
+
   async function toggleFollow(userId, active) {
     // X Web uses REST for friendships; these are not GraphQL operations.
     const path = `/i/api/1.1/friendships/${active ? "create" : "destroy"}.json`;
@@ -422,18 +438,21 @@
     if (!response.ok || json?.errors?.length) {
       throw new Error(json?.errors?.[0]?.message || `X 关注请求失败（${response.status}）`);
     }
-    // X's current REST user normalizer accepts a string `id` as well as legacy
-    // `id_str`. Never coerce a numeric snowflake: it may already be rounded.
-    const returnedUserId = typeof json?.id === "string" ? json.id : json?.id_str;
-    if (returnedUserId !== userId || typeof json?.following !== "boolean"
-      || (active ? !json.following && !json.follow_request_sent : json.following)) {
-      throw new Error("X 未确认关注状态，请在 X 个人资料页核对后重试");
+    const direct = followStateFromUser(json, userId);
+    if (direct && (active ? direct.following || direct.followRequestSent : !direct.following && !direct.followRequestSent)) {
+      return direct;
     }
-    return {
-      following: json.following,
-      followRequestSent: Boolean(json.follow_request_sent),
-      followers: Number.isFinite(json.followers_count) ? json.followers_count : null
-    };
+    // The write succeeded, but its response may omit viewer relationship fields.
+    // Reconcile once with a read. Never retry the write or report its success as
+    // a mutation failure merely because a response field/verification is missing.
+    try {
+      const profile = await graphql("UserByRestId", { userId }, "GET", AbortSignal.timeout(4000));
+      const verified = followStateFromUser(profile?.data?.user?.result, userId);
+      if (verified) return verified;
+    } catch {
+      // A failed read does not undo an accepted friendship request.
+    }
+    return { confirmed: false };
   }
 
   function respond(requestId, ok, payload) {

@@ -775,6 +775,16 @@
   }
 
   function updateAuthorFollowState(author, result) {
+    if (result.confirmed === false) {
+      const mark = (model) => {
+        if (!model) return;
+        if (String(model.author?.id || "") === String(author.id)) model.author.followStateUnconfirmed = true;
+        mark(model.quote);
+      };
+      [...state.ancestors, state.focal, ...state.replies].forEach(mark);
+      author.followStateUnconfirmed = true;
+      return;
+    }
     const active = result.following;
     const nextFollowers = Number.isFinite(result.followers) ? result.followers
       : Math.max(0, Number(author.followers || 0) + Number(active) - Number(Boolean(author.viewerFollowing)));
@@ -782,6 +792,7 @@
       if (!model) return;
       if (String(model.author?.id || "") === String(author.id || "")) {
         model.author.viewerFollowing = active;
+        model.author.followStateUnconfirmed = false;
         model.author.followRequestSent = result.followRequestSent;
         model.author.followers = nextFollowers;
       }
@@ -789,6 +800,7 @@
     };
     [...state.ancestors, state.focal, ...state.replies].forEach(update);
     author.viewerFollowing = active;
+    author.followStateUnconfirmed = false;
     author.followRequestSent = result.followRequestSent;
     author.followers = nextFollowers;
   }
@@ -804,10 +816,12 @@
     const refresh = () => {
       const following = Boolean(author.viewerFollowing);
       const pending = !following && Boolean(author.followRequestSent);
-      const label = following ? "正在关注" : pending ? "已请求" : "关注";
-      button.dataset.following = String(following);
-      button.disabled = pending;
-      button.title = pending ? "关注请求待批准，可在 X 个人资料页管理" : "";
+      const uncertain = Boolean(author.followStateUnconfirmed);
+      const label = uncertain ? "查看状态" : following ? "正在关注" : pending ? "已请求" : "关注";
+      button.dataset.following = String(following && !uncertain);
+      button.disabled = pending && !uncertain;
+      button.title = uncertain ? "请求已提交，点击在 X 个人资料页核对状态"
+        : pending ? "关注请求待批准，可在 X 个人资料页管理" : "";
       button.querySelector(".tuzai-profile-follow-default").textContent = label;
       button.setAttribute("aria-label", `${label} @${author.handle || author.name || "X 用户"}`);
       const followers = card.querySelector(".tuzai-profile-followers-count");
@@ -818,15 +832,26 @@
       event.preventDefault();
       event.stopPropagation();
       if (button.disabled) return;
+      if (author.followStateUnconfirmed) {
+        const profilePath = author.handle ? encodeURIComponent(author.handle) : `i/user/${author.id}`;
+        window.open(`https://x.com/${profilePath}`, "_blank", "noopener");
+        return;
+      }
       const nextActive = !Boolean(author.viewerFollowing);
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
       try {
-        const result = await requestPage("TOGGLE_FOLLOW", { userId: author.id, active: nextActive });
+        const result = await requestPage("TOGGLE_FOLLOW", { userId: author.id, active: nextActive }, 30000);
         updateAuthorFollowState(author, result);
         refresh();
-        notify(result.following ? `已关注 @${author.handle}`
-          : result.followRequestSent ? `已发送关注请求 @${author.handle}` : `已取消关注 @${author.handle}`);
+        if (result.confirmed === false) {
+          notify("请求已提交，状态暂未同步，可点击“查看状态”核对", "info");
+        } else {
+          notify(result.following ? `已关注 @${author.handle}`
+            : result.followRequestSent ? `已发送关注请求 @${author.handle}`
+              : nextActive ? `X 当前显示尚未关注 @${author.handle}` : `已取消关注 @${author.handle}`,
+          nextActive && !result.following && !result.followRequestSent ? "info" : "success");
+        }
       } catch (error) {
         notify(error instanceof Error ? error.message : "关注操作失败", "error");
       } finally {
