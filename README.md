@@ -6,7 +6,7 @@
 
 > 本项目是社区维护的非官方工具，与 X Corp. 没有关联，也没有得到其赞助或认可。X 和 Twitter 是其各自权利人的商标。
 
-![Peek 当前界面](docs/qa-composer-collapsed.png)
+![Peek 当前界面](docs/peek-preview.png)
 
 ## 01 它解决什么问题
 
