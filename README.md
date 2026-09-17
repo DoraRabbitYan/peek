@@ -55,8 +55,8 @@ Peek 把这个过程改成了浮层阅读。帖子和评论放在同一个窗口
 Windows PowerShell、macOS、Linux 和 Git Bash 都可以使用下面这组命令：
 
 ```bash
-git clone https://github.com/xuntianx/tuzai-x-popover.git
-cd tuzai-x-popover
+git clone https://github.com/DoraRabbitYan/peek.git
+cd peek
 npm install
 npm run build:extension
 ```
@@ -103,7 +103,7 @@ npm test
 ## 08 参与贡献
 
 这个项目已经使用 MIT License 开源，欢迎一起完善帖子解析、评论交互、X 改版兼容、自动化测试、文档和界面细节。
-提交代码前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。发现普通问题可以提交 [GitHub Issue](https://github.com/xuntianx/tuzai-x-popover/issues)；涉及安全或隐私的问题，请按 [SECURITY.md](SECURITY.md) 私下报告，不要直接公开敏感信息。
+提交代码前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。发现普通问题可以提交 [GitHub Issue](https://github.com/DoraRabbitYan/peek/issues)；涉及安全或隐私的问题，请按 [SECURITY.md](SECURITY.md) 私下报告，不要直接公开敏感信息。
 
 ## 09 项目结构
 

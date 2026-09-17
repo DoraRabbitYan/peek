@@ -5,12 +5,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/xuntianx/tuzai-x-popover.git"
+    "url": "https://github.com/DoraRabbitYan/peek.git"
   },
   "bugs": {
-    "url": "https://github.com/xuntianx/tuzai-x-popover/issues"
+    "url": "https://github.com/DoraRabbitYan/peek/issues"
   },
-  "homepage": "https://github.com/xuntianx/tuzai-x-popover#readme",
+  "homepage": "https://github.com/DoraRabbitYan/peek#readme",
   "type": "module",
   "scripts": {
     "dev": "vite",
