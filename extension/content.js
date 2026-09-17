@@ -1987,7 +1987,7 @@
     root.id = ROOT_ID;
     root.setAttribute("role", "dialog");
     root.setAttribute("aria-modal", "true");
-    root.setAttribute("aria-label", "兔崽插件帖子阅读器");
+    root.setAttribute("aria-label", "Peek 帖子阅读器");
     root.addEventListener("wheel", (event) => {
       if (!event.target.closest?.(".tuzai-scroll-area")) event.preventDefault();
     }, { passive: false });
@@ -2000,7 +2000,7 @@
     const dialog = element("section", "tuzai-dialog");
     dialog.innerHTML = `
       <header class="tuzai-toolbar">
-        <div class="tuzai-brand"><span class="tuzai-brand-icon"></span><strong>兔崽插件</strong></div>
+        <div class="tuzai-brand"><span class="tuzai-brand-icon"></span><strong>Peek</strong></div>
         <div class="tuzai-toolbar-actions"></div>
       </header>
       <div class="tuzai-reader-grid">

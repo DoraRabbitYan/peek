@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "兔崽插件 · X 帖子浮层阅读器",
-  "short_name": "兔崽插件",
+  "name": "Peek · X 帖子浮层阅读器",
+  "short_name": "Peek",
   "version": "0.8.10",
   "description": "在 X 时间线用双栏浮层阅读原帖与评论，并完成基础互动和纯文字回复。",
   "permissions": ["storage"],
   "host_permissions": ["https://x.com/*", "https://twitter.com/*"],
   "action": {
-    "default_title": "兔崽插件",
+    "default_title": "Peek",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

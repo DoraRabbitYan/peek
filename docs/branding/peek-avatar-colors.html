@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Peek · 头像配色</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #f6f6f5;
+        color: #242424;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      main { max-width: 1160px; margin: 0 auto; padding: 56px 32px 64px; }
+      header { margin-bottom: 32px; }
+      h1 { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -0.6px; }
+      header p { margin: 12px 0 0; color: #727272; font-size: 16px; }
+      .colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+      figure { margin: 0; padding: 16px; background: #fff; border: 1px solid #e9e9e7; border-radius: 16px; }
+      figure.selected { border-color: #ce2e79; }
+      a { display: block; border-radius: 8px; }
+      a:focus-visible { outline: 3px solid #383838; outline-offset: 5px; }
+      img { display: block; width: 100%; height: auto; }
+      figcaption { display: flex; align-items: baseline; gap: 12px; padding: 18px 2px 4px; font-size: 17px; font-weight: 500; }
+      .number { color: #969696; font-size: 13px; font-weight: 400; font-variant-numeric: tabular-nums; }
+      .version { color: #848484; font-size: 13px; font-weight: 400; }
+      .selection { margin-left: auto; color: #ce2e79; font-size: 13px; white-space: nowrap; }
+      @media (max-width: 900px) {
+        main { padding: 40px 24px 48px; }
+        .colors { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+      }
+      @media (max-width: 520px) {
+        main { padding: 32px 20px 40px; }
+        h1 { font-size: 26px; }
+        header { margin-bottom: 24px; }
+        .colors { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Peek · 头像配色</h1>
+        <p>保留窗口内的洋红色，头像外围透明</p>
+      </header>
+      <div class="colors">
+        <figure class="selected">
+          <a href="peek-avatar-v5-transparent.png"><img src="peek-avatar-v5-transparent.png" alt="外围透明的洋红兔子头像" /></a>
+          <figcaption><span class="number">08</span><span>洋红 <span class="version">（外围透明）</span></span><span class="selection">当前使用</span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v1.png"><img src="peek-avatar-v1.png" alt="第一版洋红配色头像" /></a>
+          <figcaption><span class="number">06</span><span>洋红 <span class="version">（第一版）</span></span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v4-sakura-pink.png"><img src="peek-avatar-v4-sakura-pink.png" alt="樱花粉配色头像" /></a>
+          <figcaption><span class="number">07</span><span>樱花粉</span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v3-sage.png"><img src="peek-avatar-v3-sage.png" alt="鼠尾草绿配色头像" /></a>
+          <figcaption><span class="number">01</span><span>鼠尾草绿</span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v3-apricot.png"><img src="peek-avatar-v3-apricot.png" alt="奶杏橙配色头像" /></a>
+          <figcaption><span class="number">02</span><span>奶杏橙</span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v3-lavender.png"><img src="peek-avatar-v3-lavender.png" alt="薰衣草紫配色头像" /></a>
+          <figcaption><span class="number">03</span><span>薰衣草紫</span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v3-ocean.png"><img src="peek-avatar-v3-ocean.png" alt="深海蓝配色头像" /></a>
+          <figcaption><span class="number">04</span><span>深海蓝</span></figcaption>
+        </figure>
+        <figure>
+          <a href="peek-avatar-v2-mist-blue.png"><img src="peek-avatar-v2-mist-blue.png" alt="雾蓝配色头像，上一版" /></a>
+          <figcaption><span class="number">05</span><span>雾蓝 <span class="version">（上一版）</span></span></figcaption>
+        </figure>
+      </div>
+    </main>
+  </body>
+</html>

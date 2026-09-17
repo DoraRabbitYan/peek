@@ -269,13 +269,13 @@ export function App() {
       <TimelineBackground onOpen={() => setOpen(true)} />
       {!open && <button className="demo-reopen" onClick={() => setOpen(true)}>重新打开浮层</button>}
       {open && (
-        <div className="tuzai-overlay tuzai-theme-light" role="dialog" aria-modal="true" aria-label="兔崽插件帖子阅读器">
+        <div className="tuzai-overlay tuzai-theme-light" role="dialog" aria-modal="true" aria-label="Peek 帖子阅读器">
           <button className="tuzai-backdrop" aria-label="关闭浮层" onClick={() => setOpen(false)} />
           <section className="tuzai-dialog">
             <header className="tuzai-toolbar">
               <div className="tuzai-brand">
                 <img src="/assets/tuzai-icon-source.png" alt="" />
-                <strong>兔崽插件</strong>
+                <strong>Peek</strong>
               </div>
               <div className="tuzai-toolbar-actions">
                 <button className="tuzai-icon-button" aria-label="在 X 打开"><i className="ph ph-arrow-square-out" /></button>
@@ -303,7 +303,7 @@ export function App() {
                     <a className="tuzai-quotes-link" href="https://x.com/tuzai_lab/status/2087155564904370681/quotes" target="_blank" rel="noreferrer">查看引用 <i className="ph ph-caret-right" /></a>
                   </div>
                   <section className="tuzai-composer" data-expanded={composerExpanded || Boolean(replyText.trim()) || replyTarget !== "原帖"} data-target-url="https://x.com/tuzai_lab/status/2087155564904370681" onFocus={() => { setComposerExpanded(true); window.requestAnimationFrame(() => resizeReplyInput()); }}>
-                    <img className="tuzai-composer-avatar" src="/assets/tino-avatar.png" alt="" />
+                    <img className="tuzai-composer-avatar" src="/assets/peek-composer-avatar.png" alt="" />
                     <div className="tuzai-composer-body"><span className="tuzai-composer-target">回复{replyTarget}</span><textarea ref={replyInput} rows="1" value={replyText} onChange={(event) => { setReplyText(event.target.value); setComposerExpanded(true); resizeReplyInput(event.target); }} onBlur={(event) => collapseReplyComposer(event.currentTarget.closest(".tuzai-composer"))} placeholder={`发布你对${replyTarget}的回复`} aria-label="发布你的回复" /></div>
                     <button className="tuzai-reply-submit" type="button" disabled={!replyText.trim()} onClick={publishReply}>回复</button>
                   </section>

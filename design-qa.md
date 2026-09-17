@@ -21,7 +21,7 @@ The current signed-in X home page was also inspected with its native author hove
 
 ## Verified implementation
 
-- Global toolbar: reduced from 72 px to 56 px on desktop and 54 px on narrow mobile layouts. It contains only the rabbit icon, exact title `兔崽插件`, open-in-X, and close controls.
+- Global toolbar: reduced from 72 px to 56 px on desktop and 54 px on narrow mobile layouts. It contains only the rabbit icon, exact title `Peek`, open-in-X, and close controls.
 - Collapsed composer: measured at 58 px after the transition settles. Reply-target text is hidden; the avatar, single-line placeholder, and reply button remain.
 - Focused composer: measured at 92 px. Reply-target text appears without adding a character counter or media controls.
 - Multiline composer: four lines increased the component to 164 px and the textarea to 100 px.

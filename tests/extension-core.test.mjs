@@ -600,7 +600,7 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.doesNotMatch(content, /TUZAI_PERFORM_ACTION/);
   assert.match(styles, /\.tuzai-post-text[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
   assert.match(styles, /\.tuzai-thread-text\s*\{[^}]*font-size:\s*15px[^}]*line-height:\s*20px/);
-  assert.match(content, /<strong>兔崽插件<\/strong>/);
+  assert.match(content, /<strong>Peek<\/strong>/);
   assert.match(content, /globalThis\.TuzaiBrandIconDataUrl \|\| extensionUrl\("icons\/icon48\.png"\)/);
   assert.match(content, /tuzai-sort-group/);
   assert.match(content, /条回复/);
