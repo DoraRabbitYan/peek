@@ -393,13 +393,128 @@
     return graphql(operationName, variables);
   }
 
-  async function createReply(tweetId, text) {
+  async function uploadMedia(file, fileName = "", fileType = "") {
+    const isVideo = /^video\//i.test(fileType || file.type || "");
+    const mediaCategory = isVideo ? "tweet_video" : "tweet_image";
+    const mediaType = fileType || file.type || (isVideo ? "video/mp4" : "image/jpeg");
+    const totalBytes = file.size;
+
+    let baseUrl = "https://upload.x.com/1.1/media/upload.json";
+
+    const initData = new FormData();
+    initData.append("command", "INIT");
+    initData.append("total_bytes", String(totalBytes));
+    initData.append("media_type", mediaType);
+    initData.append("media_category", mediaCategory);
+
+    const initHeaders = await requestHeaders("/1.1/media/upload.json", "POST", true);
+    delete initHeaders["content-type"];
+
+    let initRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: initHeaders,
+      credentials: "include",
+      body: initData
+    }).catch(() => null);
+
+    if (!initRes || !initRes.ok) {
+      baseUrl = "https://upload.twitter.com/1.1/media/upload.json";
+      initRes = await fetch(baseUrl, {
+        method: "POST",
+        headers: initHeaders,
+        credentials: "include",
+        body: initData
+      });
+    }
+
+    const initJson = await initRes.json().catch(() => null);
+    const mediaId = initJson?.media_id_string || (initJson?.media_id ? String(initJson.media_id) : null);
+    if (!initRes.ok || !mediaId) {
+      throw new Error(initJson?.errors?.[0]?.message || `媒体初始化失败（${initRes.status}）`);
+    }
+
+    const CHUNK_SIZE = 4 * 1024 * 1024;
+    let segmentIndex = 0;
+    for (let offset = 0; offset < totalBytes; offset += CHUNK_SIZE) {
+      const chunk = file.slice(offset, Math.min(offset + CHUNK_SIZE, totalBytes));
+      const appendData = new FormData();
+      appendData.append("command", "APPEND");
+      appendData.append("media_id", mediaId);
+      appendData.append("segment_index", String(segmentIndex));
+      appendData.append("media", chunk, fileName || (isVideo ? "video.mp4" : "image.jpg"));
+
+      const appendHeaders = await requestHeaders("/1.1/media/upload.json", "POST", true);
+      delete appendHeaders["content-type"];
+
+      const appendRes = await fetch(baseUrl, {
+        method: "POST",
+        headers: appendHeaders,
+        credentials: "include",
+        body: appendData
+      });
+      if (!appendRes.ok) {
+        throw new Error(`媒体数据上传失败（${appendRes.status}）`);
+      }
+      segmentIndex += 1;
+    }
+
+    const finalizeData = new FormData();
+    finalizeData.append("command", "FINALIZE");
+    finalizeData.append("media_id", mediaId);
+
+    const finalizeHeaders = await requestHeaders("/1.1/media/upload.json", "POST", true);
+    delete finalizeHeaders["content-type"];
+
+    const finalizeRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: finalizeHeaders,
+      credentials: "include",
+      body: finalizeData
+    });
+    const finalizeJson = await finalizeRes.json().catch(() => null);
+    if (!finalizeRes.ok || finalizeJson?.errors?.length) {
+      throw new Error(finalizeJson?.errors?.[0]?.message || `媒体处理完成失败（${finalizeRes.status}）`);
+    }
+
+    if (finalizeJson?.processing_info) {
+      let state = finalizeJson.processing_info.state;
+      let checkAfter = (finalizeJson.processing_info.check_after_secs || 1) * 1000;
+      while (state === "pending" || state === "in_progress") {
+        await new Promise((resolve) => setTimeout(resolve, Math.max(checkAfter, 1000)));
+        const statusHeaders = await requestHeaders("/1.1/media/upload.json", "GET", true);
+        delete statusHeaders["content-type"];
+        const statusRes = await fetch(`${baseUrl}?command=STATUS&media_id=${mediaId}`, {
+          method: "GET",
+          headers: statusHeaders,
+          credentials: "include"
+        });
+        const statusJson = await statusRes.json().catch(() => null);
+        state = statusJson?.processing_info?.state;
+        checkAfter = (statusJson?.processing_info?.check_after_secs || 1) * 1000;
+        if (state === "failed") {
+          throw new Error(statusJson?.processing_info?.error?.message || "视频转码处理失败");
+        }
+      }
+    }
+
+    return mediaId;
+  }
+
+  async function createReply(tweetId, text, mediaItems = []) {
     const replyText = String(text || "").trim();
-    if (!replyText) throw new Error("回复内容不能为空");
+    const mediaEntities = [];
+    if (Array.isArray(mediaItems) && mediaItems.length > 0) {
+      for (const item of mediaItems) {
+        const blob = item.buffer ? new Blob([item.buffer], { type: item.type }) : item;
+        const mediaId = await uploadMedia(blob, item.name, item.type);
+        if (mediaId) mediaEntities.push({ media_id: String(mediaId) });
+      }
+    }
+    if (!replyText && mediaEntities.length === 0) throw new Error("回复内容或配图不能为空");
     return graphql("CreateTweet", {
       tweet_text: replyText,
       dark_request: false,
-      media: { media_entities: [], possibly_sensitive: false },
+      media: { media_entities: mediaEntities, possibly_sensitive: false },
       semantic_annotation_ids: [],
       disallowed_reply_options: null,
       reply: { in_reply_to_tweet_id: tweetId, exclude_reply_user_ids: [] }
@@ -480,7 +595,7 @@
       else if (message.type === "READ_ARTICLE") payload = await readArticle(tweetId);
       else if (message.type === "TRANSLATE_TWEET") payload = await translateTweet(tweetId, message.targetLanguage);
       else if (message.type === "TOGGLE_ACTION") payload = await toggleAction(message.action, tweetId, Boolean(message.active));
-      else if (message.type === "CREATE_REPLY") payload = await createReply(tweetId, message.text);
+      else if (message.type === "CREATE_REPLY") payload = await createReply(tweetId, message.text, message.media);
       else throw new Error("未知请求");
       respond(message.requestId, true, payload);
     } catch (error) {

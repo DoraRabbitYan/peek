@@ -2,7 +2,20 @@
   "use strict";
 
   const STATUS_PATTERN = /^\/(?:i\/web\/)?([^/?#]+)\/status\/(\d+)/i;
-  const PROFILE_PATTERN = /^\/([A-Za-z0-9_]+)\/?$/;
+  const PROFILE_PATTERN = /^\/@?([A-Za-z0-9_]+)(?:[/?#]|$)/;
+
+  function decodeHtml(text) {
+    if (!text || typeof text !== "string" || !text.includes("&")) return text || "";
+    return text
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x2F;/g, "/")
+      .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => String.fromCodePoint(parseInt(code, 16)));
+  }
 
   function normalizePostUrl(href, baseUrl = "https://x.com/") {
     if (!href || typeof href !== "string") return null;
@@ -29,7 +42,12 @@
   }
 
   function profileHandle(profileHref) {
-    return String(profileHref || "").match(PROFILE_PATTERN)?.[1]?.toLowerCase() || null;
+    if (!profileHref || typeof profileHref !== "string") return null;
+    let path = profileHref;
+    if (path.startsWith("http://") || path.startsWith("https://")) {
+      try { path = new URL(profileHref).pathname; } catch { path = profileHref; }
+    }
+    return String(path).match(PROFILE_PATTERN)?.[1]?.toLowerCase() || null;
   }
 
   function selectOwnPostUrl(hrefs, profileHref, baseUrl = "https://x.com/") {
@@ -159,6 +177,68 @@
     return ranges
       .filter((item) => Number.isInteger(item.start) && Number.isInteger(item.end) && item.start >= 0 && item.end > item.start)
       .sort((left, right) => left.start - right.start || left.end - right.end);
+  }
+
+  function stripLeadingMentions(text, entities = [], options = {}) {
+    if (!text || typeof text !== "string") return { text: "", entities: [] };
+    const currentEntities = entities || [];
+
+    let prefixLength = 0;
+    const displayTextRange = options?.displayTextRange;
+    const replyToHandle = options?.replyToHandle;
+
+    // 1. If X provides display_text_range where start > 0,
+    // Twitter officially sets display_text_range[0] to the start of the user-entered text,
+    // placing auto-injected recipient @mentions in text.slice(0, start).
+    if (Array.isArray(displayTextRange) && Number.isInteger(displayTextRange[0]) && displayTextRange[0] > 0) {
+      const candidateStart = displayTextRange[0];
+      if (candidateStart < text.length) {
+        const candidatePrefix = text.slice(0, candidateStart);
+        if (/^(@[A-Za-z0-9_]+\s*)+$/.test(candidatePrefix)) {
+          prefixLength = candidateStart;
+        }
+      }
+    }
+
+    // 2. If display_text_range was not present/usable, but we know the handle of the user being replied to,
+    // strip ONLY that specific reply-to handle from the beginning of the text.
+    if (!prefixLength && replyToHandle && typeof replyToHandle === "string") {
+      const escaped = replyToHandle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const matchTarget = text.match(new RegExp(`^@${escaped}\\b\\s*`, "i"));
+      if (matchTarget) {
+        prefixLength = matchTarget[0].length;
+      }
+    }
+
+    // 3. Fallback: if neither display_text_range nor replyToHandle was specified,
+    // strip ONLY the FIRST @mention (the reply recipient), never stripping subsequent mentions (like @Grok).
+    if (!prefixLength && !replyToHandle && !displayTextRange) {
+      const matchFirst = text.match(/^@[A-Za-z0-9_]+\s*/);
+      if (matchFirst) {
+        prefixLength = matchFirst[0].length;
+      }
+    }
+
+    if (!prefixLength) return { text, entities: currentEntities };
+
+    // Consume any trailing whitespace immediately following the stripped prefix
+    while (prefixLength < text.length && /\s/.test(text[prefixLength])) {
+      prefixLength++;
+    }
+
+    const remainingText = text.slice(prefixLength);
+    // Safety: if tweet was literally only the mention(s), keep it so we don't render a blank card
+    if (!remainingText.trim()) return { text, entities: currentEntities };
+
+    const updatedEntities = currentEntities
+      .filter((e) => e.end > prefixLength)
+      .map((e) => ({
+        ...e,
+        start: Math.max(0, e.start - prefixLength),
+        end: Math.max(0, e.end - prefixLength)
+      }));
+
+    return { text: remainingText, entities: updatedEntities };
   }
 
   function mediaItems(legacy, tweet) {
@@ -374,7 +454,45 @@
 
     const card = objectValue(tweet?.card);
     if (!card) return null;
+    const cardName = String(card?.name || card?.legacy?.name || "");
     const bindings = bindingValueMap(card);
+
+    const isPoll = /^(\d+:)?poll/i.test(cardName) || (Boolean(bindings["choice1_label"]) && Boolean(bindings["choice2_label"]));
+    if (isPoll) {
+      const options = [];
+      const mediaList = Array.isArray(legacy?.extended_entities?.media) ? legacy.extended_entities.media : [];
+      for (let i = 1; i <= 4; i++) {
+        const label = bindingString(bindings, `choice${i}_label`);
+        if (!label) break;
+        const countStr = bindingString(bindings, `choice${i}_count`);
+        const count = Number.parseInt(countStr || "0", 10) || 0;
+        const imageBinding = bindingImage(bindings, `choice${i}_image`, `choice${i}_image_original`, `choice${i}_image_small`, `choice${i}_image_large`);
+        const image = imageBinding?.url || mediaList[i - 1]?.media_url_https || "";
+        options.push({
+          index: i,
+          label: decodeHtml(label),
+          count,
+          image
+        });
+      }
+      if (options.length >= 2) {
+        const totalVotes = options.reduce((sum, opt) => sum + opt.count, 0);
+        const maxVotes = Math.max(...options.map((o) => o.count), 0);
+        const finalVal = bindings["counts_are_final"]?.boolean_value ?? bindings["counts_are_final"]?.booleanValue ?? bindings["counts_are_final"];
+        const isFinal = Boolean(finalVal === true || finalVal === "true");
+        options.forEach((opt) => {
+          opt.percentage = totalVotes > 0 ? ((opt.count / totalVotes) * 100).toFixed(1) : "0.0";
+          opt.isWinner = totalVotes > 0 && opt.count === maxVotes;
+        });
+        return {
+          type: "poll",
+          totalVotes,
+          isFinal,
+          options
+        };
+      }
+    }
+
     const sourceUrl = String(card?.legacy?.url || card?.url || bindingString(bindings, "card_url") || "");
     const expandedUrl = firstEntityUrl(legacy, (_url, entry) => !sourceUrl || entry?.url === sourceUrl)
       || bindingString(bindings, "vanity_url", "card_url")
@@ -446,19 +564,32 @@
     const entities = note?.entity_set || legacy.entities || {};
     const handle = userLegacy.screen_name || userCore.screen_name || "";
     const id = String(tweet.rest_id || legacy.id_str || "");
+    const inReplyToId = String(legacy.in_reply_to_status_id_str || "");
+    const inReplyToHandle = String(legacy.in_reply_to_screen_name || "");
+    const displayTextRange = Array.isArray(legacy.display_text_range) ? legacy.display_text_range : null;
     const quoted = depth < 1 ? tweetModel(tweet.quoted_status_result, depth + 1) : null;
+    const rawAuthorName = userLegacy.name || userCore.name || user?.name || user?.profile?.name;
+    const authorName = (rawAuthorName && String(rawAuthorName).trim()) ? decodeHtml(String(rawAuthorName).trim()) : (handle || "X 用户");
+    const decodedText = decodeHtml(text);
+    const parsedEntities = entityRanges(entities);
+    const textInfo = inReplyToId
+      ? stripLeadingMentions(decodedText, parsedEntities, { displayTextRange, replyToHandle: inReplyToHandle })
+      : { text: decodedText, entities: parsedEntities };
+    const attachment = richAttachment(legacy, tweet);
+    const media = attachment?.type === "poll" ? [] : mediaItems(legacy, tweet);
     return {
       id,
       url: handle && id ? `https://x.com/${handle}/status/${id}` : id ? `https://x.com/i/status/${id}` : "",
-      text,
-      entities: entityRanges(entities),
+      text: textInfo.text,
+      rawText: decodedText,
+      entities: textInfo.entities,
       author: {
         id: String(user?.rest_id || userLegacy.id_str || ""),
-        name: userLegacy.name || userCore.name || handle || "X 用户",
+        name: authorName,
         handle,
         avatar: String(userLegacy.profile_image_url_https || user?.avatar?.image_url || "").replace("_normal.", "_200x200."),
         verified: Boolean(user?.is_blue_verified || userLegacy.verified || user?.verification?.verified || user?.verification?.is_blue_verified),
-        description: String(userLegacy.description || userCore.description || user?.profile_bio?.description || ""),
+        description: decodeHtml(String(userLegacy.description || userCore.description || user?.profile_bio?.description || "")),
         followers: numberValue(userLegacy.followers_count ?? user?.relationship_counts?.followers_count ?? user?.relationship_counts?.followers),
         followingCount: numberValue(userLegacy.friends_count ?? user?.relationship_counts?.following_count ?? user?.relationship_counts?.following),
         viewerFollowing: Boolean(userLegacy.following || user?.relationship_perspectives?.following),
@@ -468,6 +599,8 @@
       createdAt: legacy.created_at || "",
       conversationId: String(legacy.conversation_id_str || ""),
       inReplyToId: String(legacy.in_reply_to_status_id_str || ""),
+      inReplyToHandle,
+      displayTextRange,
       counts: {
         replies: numberValue(legacy.reply_count),
         reposts: numberValue(legacy.retweet_count),
@@ -481,8 +614,8 @@
         reposted: Boolean(legacy.retweeted || legacy.current_user_retweet?.id_str),
         bookmarked: Boolean(legacy.bookmarked)
       },
-      media: mediaItems(legacy, tweet),
-      attachment: richAttachment(legacy, tweet),
+      media,
+      attachment,
       quote: quoted
     };
   }
@@ -492,9 +625,10 @@
     if (!fallback) return model;
     const fallbackAuthor = fallback.author || {};
     const author = model.author || {};
-    const placeholderName = !author.name || /^(?:X 用户|X User)$/i.test(author.name);
-    const primaryMedia = Array.isArray(model.media) ? model.media : [];
-    const fallbackMedia = Array.isArray(fallback.media) ? fallback.media : [];
+    const placeholderName = !author.name || !String(author.name).trim() || /^(?:X 用户|X User)$/i.test(String(author.name).trim());
+    const isPoll = model.attachment?.type === "poll" || fallback.attachment?.type === "poll";
+    const primaryMedia = isPoll ? [] : (Array.isArray(model.media) ? model.media : []);
+    const fallbackMedia = isPoll ? [] : (Array.isArray(fallback.media) ? fallback.media : []);
     const media = primaryMedia.length
       ? primaryMedia.map((item, index) => {
         const supplement = fallbackMedia[index];
@@ -516,8 +650,13 @@
         };
       })
       : fallbackMedia;
-    const attachment = model.attachment && fallback.attachment
-      ? {
+    let attachment = null;
+    if (model.attachment?.type === "poll") {
+      attachment = model.attachment;
+    } else if (fallback.attachment?.type === "poll") {
+      attachment = fallback.attachment;
+    } else if (model.attachment && fallback.attachment) {
+      attachment = {
         ...fallback.attachment,
         ...model.attachment,
         type: model.attachment.type || fallback.attachment.type,
@@ -530,8 +669,10 @@
         imageWidth: model.attachment.imageWidth || fallback.attachment.imageWidth || 0,
         imageHeight: model.attachment.imageHeight || fallback.attachment.imageHeight || 0,
         content: model.attachment.content || fallback.attachment.content || null
-      }
-      : model.attachment || fallback.attachment || null;
+      };
+    } else {
+      attachment = model.attachment || fallback.attachment || null;
+    }
     return {
       ...model,
       text: model.text || fallback.text || "",
@@ -661,6 +802,7 @@
   }
 
   root.TuzaiCore = Object.freeze({
+    decodeHtml,
     normalizePostUrl,
     postIdFromUrl,
     isPostDetailUrl,
@@ -673,6 +815,7 @@
     collectTweetModels,
     articleAttachmentFromPayload,
     replyCursorAfterPage,
+    stripLeadingMentions,
     parseTweetDetail
   });
 })(typeof globalThis === "object" ? globalThis : self);
