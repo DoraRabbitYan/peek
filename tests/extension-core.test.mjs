@@ -552,8 +552,8 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(content, /const hlsJsSupported = Boolean\(media\.hlsUrl && HlsPlayer\?\.isSupported\?\.\(\)\)/);
   assert.match(content, /&& !hlsJsSupported/);
   assert.ok(content.indexOf("const hlsJsSupported") < content.indexOf("const nativeHls"));
-  assert.match(content, /enableWorker: true/);
-  assert.match(content, /workerPath: chrome\.runtime\.getURL\("vendor\/hls\/hls\.worker\.js"\)/);
+  assert.match(content, /enableWorker: Boolean\(workerPath\)/);
+  assert.match(content, /extensionUrl\("vendor\/hls\/hls\.worker\.js"\)/);
   assert.match(content, /abrEwmaDefaultEstimateMax: 12000000/);
   assert.match(content, /snapshotArticle/);
   assert.match(content, /findClickedQuoteScope/);
@@ -641,6 +641,14 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(styles, /\.tuzai-composer\[data-expanded="false"\]/);
   assert.match(styles, /\.tuzai-composer\[data-expanded="true"\]/);
   assert.doesNotMatch(styles, /\.tuzai-composer\s*\{[^}]*min-height:\s*148px/);
+  assert.match(content, /composerMedia/);
+  assert.match(content, /addMediaFiles/);
+  assert.match(bridge, /uploadMedia/);
+  assert.match(bridge, /CREATE_REPLY[\s\S]*createReply\(tweetId,\s*message\.text,\s*message\.media,\s*message\.deadline\)/);
+  assert.match(styles, /\.tuzai-composer-media-grid/);
+  assert.match(styles, /\.tuzai-composer-upload-btn/);
+  assert.match(styles, /\.tuzai-composer-media-remove/);
+  assert.match(styles, /\.tuzai-composer\.tuzai-drag-over/);
   assert.doesNotMatch(content, /tuzai-pane-header/);
   assert.doesNotMatch(content, /tuzai-footer/);
   assert.doesNotMatch(bridge, /Bearer A{5,}/);
@@ -657,6 +665,7 @@ test("extension build embeds official Phosphor SVG paths without a web font", as
   assert.equal(JSON.stringify(manifest).includes("Phosphor.woff"), false);
   assert.match(icons, /chat-circle/);
   assert.match(icons, /shield-check/);
+  assert.match(icons, /"image":/);
   assert.match(icons, /<path/);
 });
 
@@ -678,4 +687,236 @@ test("extension build bundles hls.js locally before the reader content script", 
   assert.match(hls, /Hls/);
   assert.ok(worker.length > 100000);
   assert.match(license, /Apache License/);
+});
+
+test("profileHandle tolerates query params, trailing slashes and @ prefixes", () => {
+  assert.equal(Core.profileHandle("/ianneo_ai"), "ianneo_ai");
+  assert.equal(Core.profileHandle("/@ianneo_ai"), "ianneo_ai");
+  assert.equal(Core.profileHandle("/ianneo_ai/"), "ianneo_ai");
+  assert.equal(Core.profileHandle("/ianneo_ai?lang=zh"), "ianneo_ai");
+  assert.equal(Core.profileHandle("https://x.com/The_AlexLiu"), "the_alexliu");
+  assert.equal(Core.profileHandle("https://x.com/@The_AlexLiu?s=20"), "the_alexliu");
+});
+
+test("decodeHtml safely decodes HTML entities in text and author names", () => {
+  assert.equal(Core.decodeHtml("Alex &amp; Friends"), "Alex & Friends");
+  assert.equal(Core.decodeHtml("Tom &lt; Jerry &gt; &#39;Spike&#39; &quot;Tyke&quot;"), "Tom < Jerry > 'Spike' \"Tyke\"");
+  assert.equal(Core.decodeHtml("AI &#x1F680; 时代 &amp; 𝕏"), "AI 🚀 时代 & 𝕏");
+  assert.equal(Core.decodeHtml("&#119912;&#119949;&#119942;&#119961;"), "𝑨𝒍𝒆𝒙");
+});
+
+test("tweetModel handles special characters, unicode math fonts, emojis and html entities", () => {
+  const model = Core.tweetModel({
+    rest_id: "888",
+    legacy: {
+      full_text: "探索 AI 时代 &amp; 𝕏 的未来 &lt;3",
+      created_at: "Wed Sep 23 09:55:00 +0000 2026",
+      id_str: "888"
+    },
+    core: {
+      user_results: {
+        result: {
+          rest_id: "999",
+          legacy: {
+            screen_name: "dashaloveu",
+            name: "𝑨𝒍𝒆𝒙𝑭𝒂𝒂𝒂𝒂𝒏𝒈",
+            description: "Builder &amp; Creator"
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(model.id, "888");
+  assert.equal(model.text, "探索 AI 时代 & 𝕏 的未来 <3");
+  assert.equal(model.author.handle, "dashaloveu");
+  assert.equal(model.author.name, "𝑨𝒍𝒆𝒙𝑭𝒂𝒂𝒂𝒂𝒏𝒈");
+  assert.equal(model.author.description, "Builder & Creator");
+});
+
+test("stripLeadingMentions removes leading reply mentions and updates entity offsets", () => {
+  const input = "@Dora_Rabbit_ 已经用上了，必须支持。";
+  const result = Core.stripLeadingMentions(input, [], { displayTextRange: [14, input.length] });
+  assert.equal(result.text, "已经用上了，必须支持。");
+
+  // If Twitter display_text_range includes multiple auto-injected thread recipients, strip them
+  const threadResult = Core.stripLeadingMentions("@user1 @user2 Hello world!", [], { displayTextRange: [14, "@user1 @user2 Hello world!".length] });
+  assert.equal(threadResult.text, "Hello world!");
+
+  // If user actively types @grok in a reply, only the reply target is stripped, @grok is preserved
+  const activeMentionResult = Core.stripLeadingMentions("@jefflijun @grok 为什么这么说", [
+    { start: 0, end: 10, kind: "mention", label: "@jefflijun", url: "https://x.com/jefflijun" },
+    { start: 11, end: 16, kind: "mention", label: "@grok", url: "https://x.com/grok" }
+  ], { displayTextRange: [11, 23], replyToHandle: "jefflijun" });
+  assert.equal(activeMentionResult.text, "@grok 为什么这么说");
+  assert.equal(activeMentionResult.entities.length, 1);
+  assert.equal(activeMentionResult.entities[0].label, "@grok");
+  assert.equal(activeMentionResult.entities[0].start, 0);
+  assert.equal(activeMentionResult.entities[0].end, 5);
+
+  // A reply target alone does not prove a mention is outside visible text.
+  const handleFallback = Core.stripLeadingMentions("@jefflijun @grok 为什么这么说", [], { replyToHandle: "jefflijun" });
+  assert.equal(handleFallback.text, "@jefflijun @grok 为什么这么说");
+
+  // Missing metadata preserves the full original text.
+  const noOptionFallback = Core.stripLeadingMentions("@user1 @user2 Hello world!");
+  assert.equal(noOptionFallback.text, "@user1 @user2 Hello world!");
+
+  const withEntities = Core.stripLeadingMentions("@Dora_Rabbit_ check https://t.co/abc #test", [
+    { start: 0, end: 13, kind: "mention", label: "@Dora_Rabbit_", url: "https://x.com/Dora_Rabbit_" },
+    { start: 20, end: 36, kind: "url", label: "https://t.co/abc", url: "https://t.co/abc" },
+    { start: 37, end: 42, kind: "hashtag", label: "#test", url: "https://x.com/hashtag/test" }
+  ], { displayTextRange: [14, 42] });
+  assert.equal(withEntities.text, "check https://t.co/abc #test");
+  assert.equal(withEntities.entities.length, 2);
+  assert.equal(withEntities.entities[0].start, 6);
+  assert.equal(withEntities.entities[0].end, 22);
+  assert.equal(withEntities.text.slice(withEntities.entities[0].start, withEntities.entities[0].end), "https://t.co/abc");
+  assert.equal(withEntities.entities[1].start, 23);
+  assert.equal(withEntities.entities[1].end, 28);
+  assert.equal(withEntities.text.slice(withEntities.entities[1].start, withEntities.entities[1].end), "#test");
+
+  // Pure mention without other text is preserved safely
+  const pureMention = Core.stripLeadingMentions("@only_mention");
+  assert.equal(pureMention.text, "@only_mention");
+});
+
+test("tweetModel cleans leading mentions when tweet is a reply and preserves active @grok", () => {
+  const replyModel = Core.tweetModel({
+    rest_id: "777",
+    legacy: {
+      id_str: "777",
+      full_text: "@dashaloveu 好的！最近在迭代计划中咯",
+      in_reply_to_status_id_str: "2102624917732958332",
+      in_reply_to_screen_name: "dashaloveu",
+      display_text_range: [12, 24],
+      entities: { urls: [], user_mentions: [{ indices: [0, 10], screen_name: "dashaloveu" }], hashtags: [] }
+    },
+    core: { user_results: { result: { rest_id: "1", legacy: { screen_name: "Dora_Rabbit_", name: "兔崽 Dora" } } } }
+  });
+  assert.equal(replyModel.text, "好的！最近在迭代计划中咯");
+  assert.equal(replyModel.rawText, "@dashaloveu 好的！最近在迭代计划中咯");
+
+  // Active @grok mention in reply
+  const grokReplyModel = Core.tweetModel({
+    rest_id: "888",
+    legacy: {
+      id_str: "888",
+      full_text: "@jefflijun @grok 为什么这么说，和银行有什么关系",
+      in_reply_to_status_id_str: "100",
+      in_reply_to_screen_name: "jefflijun",
+      display_text_range: [11, 32],
+      entities: {
+        urls: [],
+        user_mentions: [
+          { indices: [0, 10], screen_name: "jefflijun" },
+          { indices: [11, 16], screen_name: "grok" }
+        ],
+        hashtags: []
+      }
+    },
+    core: { user_results: { result: { rest_id: "2", legacy: { screen_name: "pangyusio", name: "Pangyu 胖鱼" } } } }
+  });
+  assert.equal(grokReplyModel.text, "@grok 为什么这么说，和银行有什么关系");
+  assert.equal(grokReplyModel.entities.length, 1);
+  assert.equal(grokReplyModel.entities[0].label, "@grok");
+  assert.equal(grokReplyModel.entities[0].url, "https://x.com/grok");
+  assert.equal(grokReplyModel.entities[0].start, 0);
+  assert.equal(grokReplyModel.entities[0].end, 5);
+});
+
+test("extension content.css includes TwitterChirp and font inherit rules", async () => {
+  const css = await readFile(path.resolve("extension/content.css"), "utf8");
+  assert.match(css, /TwitterChirp/);
+  assert.match(css, /#tuzai-x-popover-root button/);
+  assert.match(css, /tuzai-subreplies-toggle-btn/);
+  assert.match(css, /tuzai-subreplies-more-btn/);
+  assert.match(css, /\.tuzai-subreply-card \.tuzai-subreplies-container/);
+});
+
+test("extension build embeds moon, sun and caret Phosphor SVG icons", async () => {
+  const icons = await readFile(path.resolve("dist-extension/vendor/phosphor/icons.js"), "utf8");
+  assert.match(icons, /"moon":/);
+  assert.match(icons, /"sun":/);
+  assert.match(icons, /"caret-down":/);
+  assert.match(icons, /"caret-up":/);
+});
+
+test("parses X poll card into rich attachment, calculates percentages, and suppresses media gallery", () => {
+  const pollTweet = {
+    rest_id: "2090000000000000000",
+    core: {
+      user_results: {
+        result: {
+          rest_id: "u123",
+          legacy: { name: "赵赶驴", screen_name: "Gunny0412" }
+        }
+      }
+    },
+    legacy: {
+      id_str: "2090000000000000000",
+      full_text: "如果要从罗永浩和贾国龙两个人中间选择一个做朋友，你会选择谁？",
+      conversation_id_str: "2090000000000000000",
+      entities: { urls: [], user_mentions: [], hashtags: [] },
+      extended_entities: {
+        media: [
+          {
+            id_str: "m1",
+            media_url_https: "https://pbs.twimg.com/media/luoyonghao.jpg",
+            type: "photo",
+            original_info: { width: 400, height: 400 }
+          },
+          {
+            id_str: "m2",
+            media_url_https: "https://pbs.twimg.com/media/jiaguolong.jpg",
+            type: "photo",
+            original_info: { width: 400, height: 400 }
+          }
+        ]
+      }
+    },
+    card: {
+      name: "2087155564904370681:poll2choice_image",
+      legacy: {
+        binding_values: [
+          { key: "choice1_label", value: { type: "STRING", string_value: "罗永浩" } },
+          { key: "choice1_count", value: { type: "STRING", string_value: "209" } },
+          { key: "choice2_label", value: { type: "STRING", string_value: "贾国龙" } },
+          { key: "choice2_count", value: { type: "STRING", string_value: "127" } },
+          { key: "counts_are_final", value: { type: "BOOLEAN", boolean_value: true } }
+        ]
+      }
+    }
+  };
+
+  const model = Core.tweetModel(pollTweet);
+  assert.ok(model);
+  // Poll choice images must not contaminate tweet media gallery
+  assert.equal(model.media.length, 0);
+  assert.ok(model.attachment);
+  assert.equal(model.attachment.type, "poll");
+  assert.equal(model.attachment.totalVotes, 336);
+  assert.equal(model.attachment.isFinal, true);
+  assert.equal(model.attachment.options.length, 2);
+
+  const [opt1, opt2] = model.attachment.options;
+  assert.equal(opt1.label, "罗永浩");
+  assert.equal(opt1.count, 209);
+  assert.equal(opt1.percentage, "62.2");
+  assert.equal(opt1.isWinner, true);
+  assert.equal(opt1.image, "https://pbs.twimg.com/media/luoyonghao.jpg");
+
+  assert.equal(opt2.label, "贾国龙");
+  assert.equal(opt2.count, 127);
+  assert.equal(opt2.percentage, "37.8");
+  assert.equal(opt2.isWinner, false);
+  assert.equal(opt2.image, "https://pbs.twimg.com/media/jiaguolong.jpg");
+});
+
+test("extension content.css includes poll card styles", async () => {
+  const css = await readFile(path.resolve("extension/content.css"), "utf8");
+  assert.match(css, /\.tuzai-poll-card/);
+  assert.match(css, /\.tuzai-poll-track/);
+  assert.match(css, /\.tuzai-poll-fill/);
+  assert.match(css, /\.tuzai-poll-option-row\.is-winner/);
 });

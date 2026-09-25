@@ -50,3 +50,5 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - It requests only `storage` and X/Twitter host access. It must not request cookie, tabs, DNR, webRequest, or all-sites access.
 - `Esc` closes the reader while X navigation, external links, and the full composer remain explicit user actions.
 - The unpacked extension output is `dist-extension/`; the demo remains Sites-compatible and builds to `dist/client/`.
+
+- 2026-09-25 用户明确要求：Peek 收藏分类必须联动 X 原生收藏夹，不建立本地替代分类。点击收藏提供原生文件夹选择、仅保存所有书签、已收藏帖重新分类及显式取消收藏。缺权限/接口不可用时仍可普通收藏。新建和管理文件夹跳转 X 原生页面；不得把模拟测试等同真实账号联动验收。

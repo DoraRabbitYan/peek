@@ -22,12 +22,17 @@
     resetPostScrollOnRender: false,
     replies: [],
     pinnedReplyIds: [],
+    expandedReplyIds: new Set(),
+    fetchedReplyIds: new Set(),
+    subreplyPages: new Map(),
     scrollRepliesToTop: false,
     cursor: null,
     sort: "relevant",
     sortOpen: false,
     replyTarget: null,
     replyText: "",
+    composerMedia: [],
+    replyUnconfirmed: false,
     composerExpanded: false,
     loading: false,
     loadingMore: false,
@@ -37,6 +42,7 @@
     currentAvatar: "",
     pageScrollX: 0,
     pageScrollY: 0,
+    themeOverride: null,
     toastTimer: null
   };
   const pendingRequests = new Map();
@@ -93,12 +99,30 @@
     }
   }
 
+  function hlsWorkerOptions() {
+    const workerPath = extensionUrl("vendor/hls/hls.worker.js");
+    return { enableWorker: Boolean(workerPath), workerPath: workerPath || undefined };
+  }
+
+  function dateLabel(value, compact = false) {
+    const node = element("time", "tuzai-author-date notranslate", `${compact ? " · " : ""}${formatDate(value, compact)}`);
+    node.setAttribute("translate", "no");
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime())) node.dateTime = date.toISOString();
+    return node;
+  }
+
   function requestPage(type, payload, timeoutMs = 18000) {
     const requestId = ++requestSequence;
+    const isReply = type === "CREATE_REPLY";
+    if (isReply) {
+      timeoutMs = 330000;
+      payload = { ...payload, deadline: Date.now() + 300000 };
+    }
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
         pendingRequests.delete(requestId);
-        reject(new Error("等待 X 响应超时，请稍后重试"));
+        reject(new Error(isReply ? "发布状态未确认，请先在 X 核对是否已发布，避免重复回复" : "等待 X 响应超时，请稍后重试"));
       }, timeoutMs);
       pendingRequests.set(requestId, { resolve, reject, timer });
       window.postMessage({ source: CONTENT_SOURCE, type, requestId, ...payload }, location.origin);
@@ -115,11 +139,112 @@
     else request.reject(new Error(event.data.error || "X 请求失败"));
   });
 
+  let systemThemeMediaQuery = null;
+  let systemThemeListener = null;
+
+  const RESERVED_HANDLE_PATHS = new Set([
+    "home", "explore", "notifications", "messages", "search", "settings", "i",
+    "compose", "login", "logout", "tos", "privacy", "help", "about"
+  ]);
+
   function currentThemeClass() {
-    const color = getComputedStyle(document.body).backgroundColor;
-    if (/rgb\(0, 0, 0\)/.test(color)) return "tuzai-theme-dark";
-    if (/rgb\((?:21|22), (?:31|32), (?:42|43)\)/.test(color)) return "tuzai-theme-dim";
+    if (state.themeOverride) return state.themeOverride;
+
+    // 1. 优先检查 X 官方的 meta[name="theme-color"]（X 切换主题时会实时更新此标签）
+    try {
+      const metaColor = document.querySelector('meta[name="theme-color"]')?.getAttribute("content")?.toLowerCase().trim();
+      if (metaColor === "#000000" || metaColor === "#000" || metaColor === "black") {
+        return "tuzai-theme-dark";
+      }
+      if (metaColor === "#15202b" || metaColor === "rgb(21, 32, 43)") {
+        return "tuzai-theme-dim";
+      }
+      if (metaColor === "#ffffff" || metaColor === "#fff" || metaColor === "white") {
+        return "tuzai-theme-light";
+      }
+    } catch { /* ignore */ }
+
+    // 2. 检查页面主要正文文字颜色（深色模式下文字必然为高亮浅白色，浅色模式下为深色）
+    try {
+      const bodyColor = getComputedStyle(document.body).color;
+      const textMatch = bodyColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+      if (textMatch) {
+        const tr = Number(textMatch[1]);
+        const tg = Number(textMatch[2]);
+        const tb = Number(textMatch[3]);
+        const textLuminance = 0.2126 * tr + 0.7152 * tg + 0.0722 * tb;
+        if (textLuminance > 160) {
+          const bodyBg = getComputedStyle(document.body).backgroundColor;
+          if (/21|32|43/.test(bodyBg)) return "tuzai-theme-dim";
+          return "tuzai-theme-dark";
+        }
+      }
+    } catch { /* ignore */ }
+
+    const candidates = [
+      document.body,
+      document.documentElement,
+      document.getElementById("react-root")
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      const bg = getComputedStyle(el).backgroundColor;
+      if (!bg || bg === "transparent" || bg === "rgba(0, 0, 0, 0)") continue;
+      const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+      if (match) {
+        const r = Number(match[1]);
+        const g = Number(match[2]);
+        const b = Number(match[3]);
+
+        // Dim (熄灯/深蓝): X 官方标准色为 rgb(21, 32, 43)，具有明确的蓝色基调
+        if (r >= 15 && r <= 35 && g >= 25 && g <= 45 && b >= 35 && b <= 60 && b > r) {
+          return "tuzai-theme-dim";
+        }
+        // Dark (纯黑/暗色): 极低亮度
+        if (r <= 25 && g <= 25 && b <= 25) {
+          return "tuzai-theme-dark";
+        }
+        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (luminance < 60) return "tuzai-theme-dark";
+        if (luminance > 180) return "tuzai-theme-light";
+      }
+    }
+
+    const docEl = document.documentElement;
+    const colorScheme = docEl.style?.colorScheme || getComputedStyle(docEl).colorScheme;
+    if (colorScheme === "dark") return "tuzai-theme-dark";
+    if (docEl.getAttribute("data-color-mode") === "dark" || docEl.getAttribute("data-theme") === "dark") {
+      return "tuzai-theme-dark";
+    }
+
+    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      return "tuzai-theme-dark";
+    }
+
     return "tuzai-theme-light";
+  }
+
+  function applyThemeClass(rootNode, themeClass) {
+    if (!rootNode) return;
+    rootNode.classList.remove("tuzai-theme-light", "tuzai-theme-dark", "tuzai-theme-dim");
+    rootNode.classList.add(themeClass);
+  }
+
+  function extractNodeTextWithEmoji(node) {
+    if (!node) return "";
+    let result = "";
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        result += child.textContent;
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.tagName === "IMG") {
+          result += child.getAttribute("alt") || "";
+        } else {
+          result += extractNodeTextWithEmoji(child);
+        }
+      }
+    }
+    return result;
   }
 
   function findCurrentAvatar() {
@@ -129,10 +254,16 @@
   }
 
   function authorProfileHref(article) {
-    const userName = article.querySelector('[data-testid="User-Name"]');
-    return [...(userName?.querySelectorAll("a[href]") || [])]
-      .map((anchor) => anchor.getAttribute("href"))
-      .find((href) => /^\/[A-Za-z0-9_]+\/?$/.test(href || "")) || null;
+    const userName = article.querySelector?.('[data-testid="User-Name"]') || article;
+    const anchors = [...(userName?.querySelectorAll?.("a[href]") || [])];
+    for (const anchor of anchors) {
+      const href = anchor.getAttribute("href") || "";
+      const match = href.match(/^\/@?([A-Za-z0-9_]+)(?:[/?#]|$)/);
+      if (match && !RESERVED_HANDLE_PATHS.has(match[1].toLowerCase())) {
+        return href;
+      }
+    }
+    return null;
   }
 
   function findPostUrl(article) {
@@ -256,11 +387,49 @@
     const userName = [...scope.querySelectorAll('[data-testid="User-Name"]')]
       .find((node) => belongsToPost(node, scope, url)) || null;
     const profileHref = authorProfileHref({ querySelector: () => userName });
-    const handle = String(profileHref || "").match(/^\/([A-Za-z0-9_]+)/)?.[1] || new URL(url).pathname.split("/")[1] || "";
-    const identityTexts = [...(userName?.querySelectorAll(`a[href="/${handle}"], a[href="/${handle}/"]`) || [])]
-      .map((anchor) => anchor.innerText.trim())
-      .filter(Boolean);
-    const name = identityTexts.find((text) => !text.startsWith("@")) || handle || "X 用户";
+    const handleMatch = String(profileHref || "").match(/^\/@?([A-Za-z0-9_]+)/);
+    let fallbackHandleFromUrl = "";
+    try {
+      const seg = new URL(url).pathname.split("/")[1];
+      if (seg && !/^(?:i|status)$/i.test(seg)) fallbackHandleFromUrl = seg;
+    } catch { /* ignore invalid URL */ }
+    const handle = handleMatch?.[1] || fallbackHandleFromUrl || "";
+
+    let name = "";
+    if (userName) {
+      const anchors = [...(userName.querySelectorAll("a[href]") || [])];
+      for (const anchor of anchors) {
+        const h = anchor.getAttribute("href") || "";
+        const cleanHref = h.replace(/^\/@?/, "").split("/")[0].split("?")[0].toLowerCase();
+        if (handle && cleanHref === handle.toLowerCase()) {
+          const text = extractNodeTextWithEmoji(anchor).trim();
+          if (text && !text.startsWith(`@${handle}`) && !text.startsWith("@")) {
+            name = text;
+            break;
+          }
+        }
+      }
+      if (!name) {
+        const dirNodes = [...(userName.querySelectorAll('[dir="ltr"], [dir="auto"]') || [])];
+        for (const el of dirNodes) {
+          const text = extractNodeTextWithEmoji(el).trim();
+          if (text && !text.startsWith("@") && !text.startsWith("·")) {
+            name = text;
+            break;
+          }
+        }
+      }
+      if (!name) {
+        for (const anchor of anchors) {
+          const text = extractNodeTextWithEmoji(anchor).trim();
+          if (text && text !== `@${handle}` && text !== "·") {
+            name = text;
+            break;
+          }
+        }
+      }
+    }
+    if (!name) name = handle || "X 用户";
     const avatarNode = [...scope.querySelectorAll('[data-testid="Tweet-User-Avatar"] img, img[src*="profile_images"]')]
       .find((node) => belongsToPost(node, scope, url));
     const textNode = [...scope.querySelectorAll('[data-testid="tweetText"]')]
@@ -347,6 +516,11 @@
     const restorePagePosition = Boolean(root);
     const pageScrollX = state.pageScrollX;
     const pageScrollY = state.pageScrollY;
+    if (systemThemeMediaQuery && systemThemeListener) {
+      systemThemeMediaQuery.removeEventListener?.("change", systemThemeListener);
+      systemThemeListener = null;
+      systemThemeMediaQuery = null;
+    }
     destroyHlsPlayers();
     disconnectReplyLoadObserver();
     disconnectTranslationObserver();
@@ -354,6 +528,11 @@
     removeProfileCard();
     root?.remove();
     window.clearTimeout(state.toastTimer);
+    if (Array.isArray(state.composerMedia)) {
+      state.composerMedia.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+    }
     Object.assign(state, {
       sourceUrl: null,
       tweetId: null,
@@ -364,19 +543,25 @@
       resetPostScrollOnRender: false,
       replies: [],
       pinnedReplyIds: [],
+      expandedReplyIds: new Set(),
+      fetchedReplyIds: new Set(),
+      subreplyPages: new Map(),
       scrollRepliesToTop: false,
       cursor: null,
       sort: "relevant",
       sortOpen: false,
       replyTarget: null,
       replyText: "",
+      composerMedia: [],
+      replyUnconfirmed: false,
       composerExpanded: false,
       loading: false,
       loadingMore: false,
       error: "",
       translationSettingsOpenFor: "",
       pageScrollX: 0,
-      pageScrollY: 0
+      pageScrollY: 0,
+      themeOverride: null
     });
     state.busy.clear();
     translationDisplay.clear();
@@ -433,8 +618,19 @@
 
   function appendRichText(container, model) {
     let text = String(model.text || "");
+    let ranges = [...(model.entities || [])];
+    if (model.inReplyToId || (model.depth && model.depth > 0)) {
+      if (!model.rawText || text === model.rawText) {
+        const stripped = Core.stripLeadingMentions(text, ranges, {
+          displayTextRange: model.displayTextRange,
+          replyToHandle: model.inReplyToHandle
+        });
+        text = stripped.text;
+        ranges = stripped.entities;
+      }
+    }
     const attachmentUrls = new Set([model.attachment?.url, model.attachment?.sourceUrl].filter(Boolean));
-    const ranges = [...(model.entities || [])].map((range) => {
+    ranges = ranges.map((range) => {
       if (range.kind === "url" && attachmentUrls.has(range.url)) return { ...range, kind: "attachment" };
       return range;
     });
@@ -728,7 +924,9 @@
 
     const identity = element("div", "tuzai-author-identity");
     const nameRow = element("div", "tuzai-author-name-row");
-    const name = element("a", "tuzai-author-name", model.author.name);
+    const rawDisplayName = model.author.name && String(model.author.name).trim();
+    const displayName = rawDisplayName || (model.author.handle ? `@${model.author.handle}` : "X 用户");
+    const name = element("a", "tuzai-author-name", displayName);
     name.href = avatarLink.href;
     name.target = "_blank";
     name.rel = "noreferrer";
@@ -744,7 +942,7 @@
     handle.target = "_blank";
     handle.rel = "noreferrer";
     secondary.append(handle);
-    if (compact) secondary.append(element("span", "tuzai-author-date", ` · ${formatDate(model.createdAt, true)}`));
+    if (compact) secondary.append(dateLabel(model.createdAt, true));
     identity.append(nameRow, secondary);
     wrap.append(avatarLink, identity);
     bindProfileHover(avatarLink, model.author, avatarLink.href);
@@ -1162,8 +1360,7 @@
         autoStartLoad: false,
         startLevel: -1,
         testBandwidth: true,
-        enableWorker: true,
-        workerPath: chrome.runtime.getURL("vendor/hls/hls.worker.js"),
+        ...hlsWorkerOptions(),
         capLevelToPlayerSize: true,
         capLevelOnFPSDrop: true,
         maxBufferLength: priority === "focal" ? 30 : 15,
@@ -1292,9 +1489,55 @@
     return grid;
   }
 
+  function pollCard(model, compact = false) {
+    const poll = model?.attachment;
+    if (!poll || poll.type !== "poll" || !Array.isArray(poll.options)) return null;
+
+    const card = element("div", `tuzai-poll-card${compact ? " tuzai-poll-compact" : ""}`);
+    const optionsContainer = element("div", "tuzai-poll-options");
+
+    for (const opt of poll.options) {
+      const row = element("div", `tuzai-poll-option-row${opt.isWinner ? " is-winner" : ""}`);
+
+      if (opt.image) {
+        const img = document.createElement("img");
+        img.className = "tuzai-poll-option-image";
+        img.src = opt.image;
+        img.alt = opt.label || "选项配图";
+        img.loading = "lazy";
+        row.append(img);
+      }
+
+      const track = element("div", "tuzai-poll-track");
+      const fill = element("div", "tuzai-poll-fill");
+      const pctValue = Math.min(100, Math.max(0, Number.parseFloat(opt.percentage) || 0));
+      fill.style.width = `${pctValue}%`;
+      track.append(fill);
+
+      const label = element("span", "tuzai-poll-label", opt.label || "");
+      track.append(label);
+      row.append(track);
+
+      const pct = element("span", "tuzai-poll-pct", `${opt.percentage}%`);
+      row.append(pct);
+
+      optionsContainer.append(row);
+    }
+    card.append(optionsContainer);
+
+    const totalVotesStr = formatCount(poll.totalVotes || 0) || "0";
+    const statusText = poll.isFinal ? "最终结果" : "进行中";
+    const meta = element("div", "tuzai-poll-meta", `${totalVotesStr} 次投票 · ${statusText}`);
+    card.append(meta);
+
+    return card;
+  }
+
   function attachmentCard(model, compact = false) {
-    const attachment = model.attachment;
-    if (!attachment || (!attachment.image && !attachment.title && !attachment.description)) return null;
+    const attachment = model?.attachment;
+    if (!attachment) return null;
+    if (attachment.type === "poll") return pollCard(model, compact);
+    if (!attachment.image && !attachment.title && !attachment.description) return null;
     if (attachment.type === "article" && attachment.content?.blocks?.length && !compact) return articleReader(model);
     const card = element("a", `tuzai-attachment-card tuzai-attachment-${attachment.type || "website"}${compact ? " tuzai-attachment-compact" : ""}`);
     card.href = attachment.url || model.url;
@@ -1490,7 +1733,7 @@
       actionButton(model, "reply", "ph-chat-circle", "回复", model.counts.replies),
       actionButton(model, "repost", "ph-arrows-clockwise", model.flags.reposted ? "取消转发" : "转发", model.counts.reposts),
       actionButton(model, "like", "ph-heart", model.flags.liked ? "取消喜欢" : "喜欢", model.counts.likes),
-      actionButton(model, "bookmark", "ph-bookmark-simple", model.flags.bookmarked ? "移除书签" : "加入书签", model.counts.bookmarks),
+      actionButton(model, "bookmark", "ph-bookmark-simple", model.flags.bookmarked ? "管理收藏分类" : "收藏到 X 收藏夹", model.counts.bookmarks),
       actionButton(model, "share", "ph-upload-simple", "分享")
     );
     return bar;
@@ -1515,7 +1758,7 @@
     const quote = quoteCard(model);
     if (quote) article.append(quote);
     const meta = element("div", "tuzai-post-meta");
-    meta.append(element("span", "", formatDate(model.createdAt)));
+    meta.append(dateLabel(model.createdAt));
     if (model.counts.views) {
       meta.append(document.createTextNode(" · "), element("strong", "", formatCount(model.counts.views)), document.createTextNode(" 查看"));
     }
@@ -1580,11 +1823,51 @@
     });
   }
 
-  function renderReply(model) {
-    const article = element("article", "tuzai-reply-card");
+  function isTopLevelReply(reply) {
+    if (!reply) return false;
+    if (state.focal && reply.inReplyToId === state.focal.id) return true;
+    return Number(reply.depth || 0) === 0;
+  }
+
+  async function fetchSubreplies(model, depth) {
+    const pages = state.subreplyPages;
+    const page = pages.get(model.id) || { cursor: null, loaded: false, loading: false, error: false };
+    if (page.loading || (page.loaded && !page.cursor)) return;
+    pages.set(model.id, page);
+    const previousCursor = page.cursor;
+    page.loading = true;
+    page.error = false;
+    renderReader();
+    try {
+      const json = await requestPage("READ_THREAD", { tweetId: model.id, ...(previousCursor ? { cursor: previousCursor } : {}) });
+      // Closing or replacing the reader invalidates this branch's response.
+      if (state.subreplyPages !== pages) return;
+      const parsed = Core.parseTweetDetail(json, model.id);
+      const added = mergeReplies((parsed.replies || []).map((reply) => ({
+        ...reply,
+        inReplyToId: reply.inReplyToId || model.id,
+        depth: depth + 1 + (Number(reply.depth) || 0)
+      })));
+      page.cursor = Core.replyCursorAfterPage(previousCursor, parsed.cursor, added);
+      page.loaded = true;
+      state.fetchedReplyIds.add(model.id);
+    } catch (error) {
+      if (state.subreplyPages !== pages) return;
+      page.error = true;
+      notify("加载回复失败，请重试", "error");
+    } finally {
+      page.loading = false;
+      if (state.subreplyPages === pages) renderReader();
+    }
+  }
+
+  function renderReply(model, depth = 0, ancestors = new Set()) {
+    const path = new Set(ancestors).add(model.id);
+    const isSubReply = depth > 0;
+    const article = element("article", isSubReply ? "tuzai-reply-card tuzai-subreply-card" : "tuzai-reply-card");
     article.dataset.tweetId = model.id;
-    article.style.setProperty("--tuzai-depth", String(model.depth || 0));
-    article.dataset.depth = String(model.depth || 0);
+    article.style.setProperty("--tuzai-depth", String(depth));
+    article.dataset.depth = String(depth);
     const header = authorLine(model, true);
     const text = translatedTextBlock(model, "tuzai-reply-text", "reply");
     const body = element("div", "tuzai-reply-body");
@@ -1596,6 +1879,73 @@
     const quote = quoteCard(model, "reply");
     if (quote) body.append(quote);
     body.append(actionBar(model, true));
+
+    const subReplies = state.replies.filter((reply) => reply.inReplyToId === model.id && !path.has(reply.id));
+    const subCount = Math.max(subReplies.length, Number(model.counts?.replies || 0));
+    if (subCount > 0) {
+      const isExpanded = state.expandedReplyIds.has(model.id);
+      const page = state.subreplyPages.get(model.id);
+      const isLoading = Boolean(page?.loading);
+      const toggleRow = element("div", "tuzai-subreplies-toggle-row");
+      const toggleBtn = element("button", "tuzai-subreplies-toggle-btn");
+      toggleBtn.type = "button";
+      toggleBtn.setAttribute("aria-expanded", String(isExpanded));
+
+      const toggleIcon = isLoading
+        ? element("span", "tuzai-spinner")
+        : icon(isExpanded ? "ph-caret-up" : "ph-caret-down");
+      const toggleLabel = isLoading
+        ? " 正在加载回复…"
+        : isExpanded
+          ? " 收起回复"
+          : ` 查看 ${subCount} 条回复`;
+
+      toggleBtn.append(toggleIcon, document.createTextNode(toggleLabel));
+
+      toggleBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        if (state.expandedReplyIds.has(model.id)) {
+          state.expandedReplyIds.delete(model.id);
+          renderReader();
+        } else {
+          state.expandedReplyIds.add(model.id);
+          if (!state.subreplyPages.get(model.id)?.loaded && !state.subreplyPages.get(model.id)?.loading) {
+            await fetchSubreplies(model, depth);
+          } else {
+            renderReader();
+          }
+        }
+      });
+
+      toggleRow.append(toggleBtn);
+      body.append(toggleRow);
+
+      if (isExpanded) {
+        const subContainer = element("div", "tuzai-subreplies-container");
+        if (depth >= 2) subContainer.dataset.flat = "true";
+        const currentSubs = state.replies.filter((reply) => reply.inReplyToId === model.id && !path.has(reply.id));
+        if (currentSubs.length > 0) {
+          currentSubs.forEach((sub) => {
+            subContainer.append(renderReply(sub, depth + 1, path));
+          });
+        } else if (!isLoading && !page?.error) {
+          const emptyNotice = element("div", "tuzai-subreplies-empty", "暂无更多回复");
+          subContainer.append(emptyNotice);
+        }
+        if (page?.cursor || page?.error || isLoading) {
+          const more = element("button", "tuzai-subreplies-more-btn", isLoading ? "正在加载回复…" : page?.error ? "重试加载回复" : "继续查看回复");
+          more.type = "button";
+          more.disabled = isLoading;
+          more.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            await fetchSubreplies(model, depth);
+          });
+          subContainer.append(more);
+        }
+        body.append(subContainer);
+      }
+    }
+
     article.append(body);
     return article;
   }
@@ -1619,10 +1969,10 @@
   function sortedReplies() {
     const pinned = state.pinnedReplyIds.map((id) => state.replies.find((reply) => reply.id === id)).filter(Boolean);
     const pinnedIds = new Set(pinned.map((reply) => reply.id));
-    const replies = state.replies.filter((reply) => !pinnedIds.has(reply.id));
-    if (state.sort === "latest") replies.sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
-    if (state.sort === "liked") replies.sort((left, right) => right.counts.likes - left.counts.likes);
-    return [...pinned, ...replies];
+    const topLevel = state.replies.filter((reply) => isTopLevelReply(reply) && !pinnedIds.has(reply.id));
+    if (state.sort === "latest") topLevel.sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
+    if (state.sort === "liked") topLevel.sort((left, right) => right.counts.likes - left.counts.likes);
+    return [...pinned, ...topLevel];
   }
 
   function renderSortMenu(container) {
@@ -1644,6 +1994,76 @@
       menu.append(option);
     }
     container.append(menu);
+  }
+
+  function addMediaFiles(files) {
+    if (!Array.isArray(state.composerMedia)) state.composerMedia = [];
+    const currentMedia = state.composerMedia;
+    const hasExistingVideo = currentMedia.some((m) => m.isVideo);
+    const hasExistingImage = currentMedia.some((m) => !m.isVideo);
+
+    for (const file of files) {
+      const isVideo = file.type.startsWith("video/");
+      const isImage = file.type.startsWith("image/");
+      if (!isVideo && !isImage) continue;
+
+      if (isVideo) {
+        if (hasExistingImage || currentMedia.some((m) => !m.isVideo)) {
+          notify("推文不能同时包含图片和视频", "error");
+          continue;
+        }
+        if (currentMedia.length >= 1) {
+          notify("单条推文最多支持 1 个视频", "error");
+          continue;
+        }
+        if (file.size > 512 * 1024 * 1024) {
+          notify("视频文件大小不能超过 512MB", "error");
+          continue;
+        }
+        currentMedia.push({
+          id: `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          isVideo: true,
+          name: file.name
+        });
+      } else {
+        if (hasExistingVideo || currentMedia.some((m) => m.isVideo)) {
+          notify("推文不能同时包含图片和视频", "error");
+          continue;
+        }
+        if (currentMedia.length >= 4) {
+          notify("单条推文最多支持 4 张图片", "error");
+          continue;
+        }
+        if (file.size > 20 * 1024 * 1024) {
+          notify("图片文件大小不能超过 20MB", "error");
+          continue;
+        }
+        currentMedia.push({
+          id: `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          isVideo: false,
+          name: file.name
+        });
+      }
+    }
+    state.composerExpanded = true;
+    renderReader();
+    window.requestAnimationFrame(() => {
+      document.querySelector(`#${ROOT_ID} .tuzai-composer textarea`)?.focus();
+    });
+  }
+
+  function removeMediaItem(id) {
+    if (!Array.isArray(state.composerMedia)) return;
+    const index = state.composerMedia.findIndex((m) => m.id === id);
+    if (index !== -1) {
+      const [removed] = state.composerMedia.splice(index, 1);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+    }
+    renderReader();
   }
 
   function renderReplyTools(container) {
@@ -1684,7 +2104,8 @@
     const body = element("div", "tuzai-composer-body");
     const target = state.replyTarget || state.focal;
     const label = target.id === state.focal.id ? "原帖" : `@${target.author.handle}`;
-    const expanded = state.composerExpanded || Boolean(state.replyText.trim()) || target.id !== state.focal.id;
+    const hasMedia = Array.isArray(state.composerMedia) && state.composerMedia.length > 0;
+    const expanded = state.composerExpanded || Boolean(state.replyText.trim()) || hasMedia || target.id !== state.focal.id;
     composer.dataset.expanded = String(expanded);
     const targetRow = element("div", "tuzai-composer-target", `回复 ${label}`);
     if (target.id !== state.focal.id) {
@@ -1692,7 +2113,7 @@
       cancel.type = "button";
       cancel.addEventListener("click", () => {
         state.replyTarget = state.focal;
-        state.composerExpanded = Boolean(state.replyText.trim());
+        state.composerExpanded = Boolean(state.replyText.trim()) || Boolean(state.composerMedia?.length);
         renderReader();
       });
       targetRow.append(cancel);
@@ -1702,9 +2123,31 @@
     textarea.value = state.replyText;
     textarea.placeholder = `发布你对${label}的回复`;
     textarea.setAttribute("aria-label", "发布你的回复");
-    const submit = element("button", "tuzai-reply-submit", "回复");
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*,video/*";
+    fileInput.multiple = true;
+    fileInput.style.display = "none";
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files?.length) {
+        addMediaFiles(Array.from(fileInput.files));
+        fileInput.value = "";
+      }
+    });
+
+    const uploadBtn = element("button", "tuzai-composer-upload-btn");
+    uploadBtn.type = "button";
+    uploadBtn.title = "添加照片或视频";
+    uploadBtn.setAttribute("aria-label", "添加照片或视频");
+    uploadBtn.append(icon("ph-image"));
+    uploadBtn.addEventListener("click", () => fileInput.click());
+
+    const submit = element("button", "tuzai-reply-submit", state.replyUnconfirmed ? "请先在 X 核对" : state.busy.has("reply") ? "发布中…" : "回复");
     submit.type = "button";
-    submit.disabled = !state.replyText.trim() || state.busy.has("reply");
+    const hasContent = Boolean(state.replyText.trim()) || hasMedia;
+    submit.disabled = !hasContent || state.busy.has("reply") || state.replyUnconfirmed;
+
     const resizeTextarea = () => {
       textarea.style.height = "auto";
       const maxHeight = 168;
@@ -1721,31 +2164,155 @@
       state.replyText = textarea.value;
       state.composerExpanded = true;
       composer.dataset.expanded = "true";
-      submit.disabled = !textarea.value.trim() || state.busy.has("reply");
+      const hasPostable = Boolean(textarea.value.trim()) || (Array.isArray(state.composerMedia) && state.composerMedia.length > 0);
+      submit.disabled = !hasPostable || state.busy.has("reply") || state.replyUnconfirmed;
       resizeTextarea();
     });
     textarea.addEventListener("keydown", (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && textarea.value.trim()) publishReply();
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        const hasPostable = Boolean(textarea.value.trim()) || (Array.isArray(state.composerMedia) && state.composerMedia.length > 0);
+        if (hasPostable && !state.busy.has("reply") && !state.replyUnconfirmed) publishReply();
+      }
     });
     submit.addEventListener("click", publishReply);
+
+    composer.addEventListener("paste", (event) => {
+      if (event.defaultPrevented) return;
+      const clipboardData = event.clipboardData || window.clipboardData;
+      if (!clipboardData) return;
+      const items = Array.from(clipboardData.items || []);
+      const files = [];
+      for (const item of items) {
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file && (file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+            files.push(file);
+          }
+        }
+      }
+      if (files.length === 0 && clipboardData.files?.length) {
+        for (const file of clipboardData.files) {
+          if (file.type.startsWith("image/") || file.type.startsWith("video/")) {
+            files.push(file);
+          }
+        }
+      }
+      if (files.length > 0) {
+        event.preventDefault();
+        const text = clipboardData.getData("text");
+        if (text) {
+          const start = textarea.selectionStart ?? textarea.value.length;
+          const end = textarea.selectionEnd ?? start;
+          state.replyText = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+          textarea.value = state.replyText;
+        }
+        addMediaFiles(files);
+      }
+    });
+
+    composer.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      composer.classList.add("tuzai-drag-over");
+    });
+    composer.addEventListener("dragleave", (event) => {
+      if (!composer.contains(event.relatedTarget)) {
+        composer.classList.remove("tuzai-drag-over");
+      }
+    });
+    composer.addEventListener("drop", (event) => {
+      event.preventDefault();
+      composer.classList.remove("tuzai-drag-over");
+      const dt = event.dataTransfer;
+      if (!dt) return;
+      const files = [];
+      if (dt.files?.length) {
+        for (const file of dt.files) {
+          if (file.type.startsWith("image/") || file.type.startsWith("video/")) {
+            files.push(file);
+          }
+        }
+      }
+      if (files.length > 0) {
+        addMediaFiles(files);
+      }
+    });
+
     composer.addEventListener("focusout", () => {
       window.setTimeout(() => {
         if (composer.contains(document.activeElement)) return;
         const stillTargetsReply = (state.replyTarget || state.focal)?.id !== state.focal?.id;
-        if (textarea.value.trim() || stillTargetsReply) return;
+        const hasAttachedMedia = Array.isArray(state.composerMedia) && state.composerMedia.length > 0;
+        if (textarea.value.trim() || hasAttachedMedia || stillTargetsReply) return;
         state.composerExpanded = false;
         composer.dataset.expanded = "false";
         textarea.style.height = "28px";
         textarea.style.overflowY = "hidden";
       }, 0);
     });
+
     body.append(targetRow, textarea);
-    composer.append(avatar, body, submit);
+    if (hasMedia) {
+      const mediaGrid = element("div", "tuzai-composer-media-grid");
+      mediaGrid.dataset.count = String(Math.min(state.composerMedia.length, 4));
+      state.composerMedia.forEach((item) => {
+        const cell = element("div", "tuzai-composer-media-item");
+        if (item.isVideo) {
+          const video = document.createElement("video");
+          video.src = item.previewUrl;
+          video.muted = true;
+          video.playsInline = true;
+          video.preload = "metadata";
+          video.className = "tuzai-composer-media-thumb";
+          cell.append(video);
+          const badge = element("span", "tuzai-composer-media-badge", "视频");
+          cell.append(badge);
+        } else {
+          const img = document.createElement("img");
+          img.src = item.previewUrl;
+          img.alt = item.name || "图片预览";
+          img.className = "tuzai-composer-media-thumb";
+          cell.append(img);
+        }
+        const removeBtn = element("button", "tuzai-composer-media-remove");
+        removeBtn.type = "button";
+        removeBtn.title = "移除";
+        removeBtn.setAttribute("aria-label", "移除配图");
+        removeBtn.append(icon("ph-x"));
+        removeBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          removeMediaItem(item.id);
+        });
+        cell.append(removeBtn);
+        mediaGrid.append(cell);
+      });
+      body.append(mediaGrid);
+    }
+
+    const actions = element("div", "tuzai-composer-actions");
+    actions.append(uploadBtn, submit, fileInput);
+    composer.append(avatar, body, actions);
     container.append(context, composer);
     if (expanded) window.requestAnimationFrame(resizeTextarea);
   }
 
   function renderReader() {
+    try {
+      renderReaderContent();
+    } catch (error) {
+      console.error("Peek render failed", error);
+      const root = document.getElementById(ROOT_ID);
+      if (!root) return;
+      const notice = element("div", "tuzai-state");
+      notice.append(element("strong", "", "内容暂时无法显示"), element("p", "", "请刷新当前 X 页面后重试；更新扩展后，已打开的页面需要重新加载。"));
+      const refresh = element("button", "", "刷新当前页面");
+      refresh.type = "button";
+      refresh.addEventListener("click", () => window.location.reload());
+      notice.append(refresh);
+      root.querySelector(".tuzai-post-body")?.replaceChildren(notice);
+    }
+  }
+
+  function renderReaderContent() {
     const root = document.getElementById(ROOT_ID);
     if (!root) return;
     const postBody = root.querySelector(".tuzai-post-body");
@@ -1902,7 +2469,120 @@
     }
   }
 
-  async function handleAction(model, action) {
+  function openBookmarkPicker(model) {
+    const root = document.getElementById(ROOT_ID);
+    if (!root || state.busy.has(`${model.id}:bookmark`)) return;
+    root.querySelector(".tuzai-bookmark-layer")?.remove();
+    const layer = element("div", "tuzai-bookmark-layer");
+    const panel = element("section", "tuzai-bookmark-picker");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", "保存到 X 收藏夹");
+    const heading = element("div", "tuzai-bookmark-heading");
+    heading.append(element("strong", "", "保存到 X 收藏夹"));
+    const close = element("button", "", "关闭");
+    close.type = "button";
+    const dismiss = () => { layer.remove(); root.querySelector(`[data-tweet-id="${model.id}"] .tuzai-action-bookmark`)?.focus(); };
+    close.addEventListener("click", dismiss);
+    heading.append(close);
+    const note = element("p", "tuzai-bookmark-note", "选择 X 原生收藏夹，或仅保存到所有书签。");
+    const all = element("button", "tuzai-bookmark-option", model.flags.bookmarked ? "已在所有书签中" : "仅保存到所有书签");
+    all.type = "button";
+    all.addEventListener("click", () => { dismiss(); if (!model.flags.bookmarked) handleAction(model, "bookmark", true); });
+    const list = element("div", "tuzai-bookmark-folders");
+    const status = element("p", "tuzai-bookmark-note", "正在读取 X 收藏夹…");
+    status.setAttribute("role", "status");
+    const more = element("button", "tuzai-bookmark-option", "加载更多收藏夹");
+    more.type = "button";
+    more.hidden = true;
+    const manage = element("a", "tuzai-bookmark-manage", "在 X 管理／新建收藏夹");
+    manage.href = "https://x.com/i/bookmarks";
+    manage.target = "_blank";
+    manage.rel = "noopener noreferrer";
+    panel.append(heading, note, all, list, status, more, manage);
+    if (model.flags.bookmarked) {
+      const remove = element("button", "tuzai-bookmark-remove", "取消收藏（从所有书签移除）");
+      remove.type = "button";
+      remove.addEventListener("click", () => { dismiss(); handleAction(model, "bookmark", true); });
+      panel.append(remove);
+    }
+    layer.append(panel);
+    layer.addEventListener("click", (event) => { event.stopPropagation(); if (event.target === layer) dismiss(); });
+    layer.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.stopPropagation(); dismiss(); }
+      if (event.key === "Tab") {
+        const focusable = [...panel.querySelectorAll("button:not(:disabled), a[href]")].filter((node) => !node.hidden);
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
+    root.append(layer);
+    close.focus();
+    const seen = new Set();
+    const cursors = new Set();
+    let cursor = "", loading = false, saving = false;
+    async function save(folder) {
+      if (saving) return;
+      saving = true;
+      const key = `${model.id}:bookmark`;
+      state.busy.add(key);
+      panel.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+      status.textContent = `正在保存到「${folder.name}」…`;
+      try {
+        const result = await requestPage("SAVE_BOOKMARK_FOLDER", { tweetId: model.id, folderId: folder.id });
+        if (!result?.saved) throw new Error("收藏结果未确认，请在 X 核对");
+        if (!root.isConnected) return;
+        const current = findModel(model.id) || model;
+        if (!current.flags.bookmarked) current.counts.bookmarks = (Number(current.counts.bookmarks) || 0) + 1;
+        current.flags.bookmarked = true;
+        dismiss();
+        renderReader();
+        notify(`已保存到 X 收藏夹「${folder.name}」`);
+      } catch (error) {
+        if (!layer.isConnected) return;
+        status.textContent = error instanceof Error ? error.message : "保存失败，请重试";
+        panel.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+      } finally {
+        state.busy.delete(key);
+        saving = false;
+      }
+    }
+    async function load() {
+      if (loading || saving) return;
+      loading = true;
+      more.disabled = true;
+      status.textContent = "正在读取 X 收藏夹…";
+      try {
+        const page = await requestPage("READ_BOOKMARK_FOLDERS", { tweetId: model.id, cursor });
+        if (!layer.isConnected) return;
+        let added = 0;
+        for (const folder of page.folders) {
+          if (seen.has(folder.id)) continue;
+          seen.add(folder.id); added++;
+          const button = element("button", "tuzai-bookmark-option", folder.name);
+          button.type = "button";
+          button.addEventListener("click", () => save(folder));
+          list.append(button);
+        }
+        if (cursor) cursors.add(cursor);
+        cursor = added && page.cursor && !cursors.has(page.cursor) ? page.cursor : "";
+        more.hidden = !cursor;
+        more.textContent = "加载更多收藏夹";
+        status.textContent = seen.size ? "分类直接同步到 X，收藏仍会出现在所有书签中。" : "还没有收藏夹，可在 X 中新建后重新打开这里。";
+      } catch (error) {
+        if (!layer.isConnected) return;
+        status.textContent = "暂时无法读取收藏夹。X 原生收藏夹需要相应会员权限，也可先打开 X 收藏页后重试。";
+        more.textContent = "重新读取收藏夹";
+        more.hidden = false;
+      } finally { loading = false; more.disabled = false; }
+    }
+    more.addEventListener("click", load);
+    load();
+  }
+
+  async function handleAction(model, action, directBookmark = false) {
+    if (action === "bookmark" && !directBookmark) return openBookmarkPicker(model);
     if (action === "reply") {
       state.replyTarget = model;
       state.composerExpanded = true;
@@ -1939,26 +2619,48 @@
 
   async function publishReply() {
     const text = state.replyText.trim();
+    const media = Array.isArray(state.composerMedia) ? [...state.composerMedia] : [];
     const target = state.replyTarget || state.focal;
-    if (!text || !target || state.busy.has("reply")) return;
+    if ((!text && media.length === 0) || !target || state.busy.has("reply") || state.replyUnconfirmed) return;
     state.busy.add("reply");
     renderReader();
     try {
-      const json = await requestPage("CREATE_REPLY", { tweetId: target.id, text });
+      let serializedMedia = [];
+      if (media.length > 0) {
+        notify("正在上传媒体…", "info");
+        serializedMedia = await Promise.all(
+          media.map(async (item) => ({
+            name: item.name,
+            type: item.file.type,
+            size: item.file.size,
+            buffer: await item.file.arrayBuffer()
+          }))
+        );
+      }
+      const json = await requestPage("CREATE_REPLY", { tweetId: target.id, text, media: serializedMedia });
       const created = Core.collectTweetModels(json).find((model) => model.id !== state.focal?.id);
+      if (!created) throw new Error("发布状态未确认，请先在 X 核对是否已发布，避免重复回复");
       if (created && (target.id === state.focal.id || state.replies.some((reply) => reply.id === target.id))) {
         created.depth = target.id === state.focal.id ? 0 : Math.min((target.depth || 0) + 1, 3);
         mergeReplies([created]);
+        if (target.id !== state.focal.id) state.expandedReplyIds.add(target.id);
         state.pinnedReplyIds = [created.id, ...state.pinnedReplyIds.filter((id) => id !== created.id)];
         state.scrollRepliesToTop = true;
       }
       target.counts.replies += 1;
       state.replyText = "";
+      if (Array.isArray(state.composerMedia)) {
+        state.composerMedia.forEach((m) => {
+          if (m.previewUrl) URL.revokeObjectURL(m.previewUrl);
+        });
+      }
+      state.composerMedia = [];
       state.replyTarget = state.focal;
       state.composerExpanded = false;
       notify("回复已发布到 X");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "回复发布失败", "error");
+      if (String(error?.message || "").startsWith("发布状态未确认")) state.replyUnconfirmed = true;
+      notify(error instanceof Error ? error.message : "回复发布失败", state.replyUnconfirmed ? "info" : "error");
     } finally {
       state.busy.delete("reply");
       renderReader();
@@ -2029,7 +2731,37 @@
     openOriginal.addEventListener("click", () => window.open(url, "_blank", "noopener"));
     const close = createIconButton("ph-x", "关闭", "tuzai-close");
     close.addEventListener("click", closePopover);
-    dialog.querySelector(".tuzai-toolbar-actions").append(openOriginal, close);
+
+    const themeButton = createIconButton("ph-moon", "切换外观主题", "tuzai-theme-toggle");
+    function updateThemeButton(theme) {
+      const isDarkOrDim = theme === "tuzai-theme-dark" || theme === "tuzai-theme-dim";
+      const iconName = isDarkOrDim ? "ph-sun" : "ph-moon";
+      themeButton.innerHTML = "";
+      themeButton.append(icon(iconName));
+      themeButton.setAttribute("aria-label", isDarkOrDim ? "切换为浅色主题" : "切换为深色主题");
+    }
+    updateThemeButton(currentThemeClass());
+    themeButton.addEventListener("click", () => {
+      const current = currentThemeClass();
+      const isDarkOrDim = current === "tuzai-theme-dark" || current === "tuzai-theme-dim";
+      const next = isDarkOrDim ? "tuzai-theme-light" : "tuzai-theme-dark";
+      state.themeOverride = next;
+      applyThemeClass(root, next);
+      updateThemeButton(next);
+      notify(next === "tuzai-theme-light" ? "已切换为浅色外观" : "已切换为深色外观");
+    });
+
+    if (window.matchMedia) {
+      systemThemeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      systemThemeListener = () => {
+        if (state.themeOverride) return;
+        applyThemeClass(root, currentThemeClass());
+        updateThemeButton(currentThemeClass());
+      };
+      systemThemeMediaQuery.addEventListener?.("change", systemThemeListener);
+    }
+
+    dialog.querySelector(".tuzai-toolbar-actions").append(themeButton, openOriginal, close);
     root.append(backdrop, dialog);
     document.body.append(root);
     close.focus();

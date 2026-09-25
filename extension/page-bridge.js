@@ -280,13 +280,16 @@
         headers,
         credentials: "include",
         cache: "no-store",
+        signal,
         body: JSON.stringify({ variables, features, queryId: operation.queryId })
       });
     }
     const json = await response.json().catch(() => null);
     if (!response.ok || json?.errors?.length) {
       const message = json?.errors?.[0]?.message || `X 请求失败（${response.status}）`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.replyRejected = Boolean(json?.errors?.length) || (response.status >= 400 && response.status < 500 && response.status !== 408);
+      throw error;
     }
     return json;
   }
@@ -393,17 +396,184 @@
     return graphql(operationName, variables);
   }
 
-  async function createReply(tweetId, text) {
+  async function readBookmarkFolders(cursor = "") {
+    if (typeof cursor !== "string" || cursor.length > 4096) throw new Error("收藏夹分页参数无效");
+    let variables = cursor ? { cursor } : {};
+    // Match a native request if this X build wraps its slice variables.
+    const template = captured.templates.get("BookmarkFoldersSlice");
+    if (template) {
+      try {
+        const observed = JSON.parse(new URL(template.url, location.origin).searchParams.get("variables") || "{}");
+        if (observed.variables && typeof observed.variables === "object") variables = { variables };
+      } catch { /* Use the current flat variable shape. */ }
+    }
+    const json = await graphql("BookmarkFoldersSlice", variables, "GET");
+    const holder = deepFind(json, (value) => Object.prototype.hasOwnProperty.call(value, "bookmark_collections_slice"), 12);
+    const slice = holder?.bookmark_collections_slice;
+    if (!Array.isArray(slice?.items)) throw new Error("X 未返回收藏夹，请确认账号有原生收藏夹权限，或先打开 X 收藏页后重试");
+    const folders = slice.items.filter((item) => typeof item?.id === "string" && item.id && typeof item.name === "string")
+      .map(({ id, name }) => ({ id, name }));
+    const next = slice.slice_info?.next_cursor;
+    return { folders, cursor: typeof next === "string" && next !== cursor && folders.length ? next : null };
+  }
+
+  async function saveBookmarkToFolder(tweetId, folderId) {
+    if (typeof folderId !== "string" || !folderId.trim() || folderId.length > 256) throw new Error("收藏夹 ID 无效");
+    // Discover queryId/features from the loaded X runtime; never pin query IDs.
+    const json = await graphql("bookmarkTweetToFolder", { tweet_id: tweetId, bookmark_collection_id: folderId });
+    if (!json?.data?.bookmark_tweet_to_folder) throw new Error("收藏结果未确认，请在 X 收藏夹中核对后再操作");
+    return { saved: true };
+  }
+
+  async function uploadMedia(file, fileName = "", fileType = "", signal) {
+    signal?.throwIfAborted();
+    const isVideo = /^video\//i.test(fileType || file.type || "");
+    const mediaCategory = isVideo ? "tweet_video" : "tweet_image";
+    const mediaType = fileType || file.type || (isVideo ? "video/mp4" : "image/jpeg");
+    const totalBytes = file.size;
+
+    let baseUrl = "https://upload.x.com/1.1/media/upload.json";
+
+    const initData = new FormData();
+    initData.append("command", "INIT");
+    initData.append("total_bytes", String(totalBytes));
+    initData.append("media_type", mediaType);
+    initData.append("media_category", mediaCategory);
+
+    const initHeaders = await requestHeaders("/1.1/media/upload.json", "POST", true);
+    delete initHeaders["content-type"];
+
+    let initRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: initHeaders,
+      credentials: "include",
+      signal,
+      body: initData
+    }).catch(() => null);
+
+    signal?.throwIfAborted();
+    if (!initRes || !initRes.ok) {
+      baseUrl = "https://upload.twitter.com/1.1/media/upload.json";
+      initRes = await fetch(baseUrl, {
+        method: "POST",
+        headers: initHeaders,
+        credentials: "include",
+      signal,
+        body: initData
+      });
+    }
+
+    const initJson = await initRes.json().catch(() => null);
+    const mediaId = initJson?.media_id_string || (initJson?.media_id ? String(initJson.media_id) : null);
+    if (!initRes.ok || !mediaId) {
+      throw new Error(initJson?.errors?.[0]?.message || `媒体初始化失败（${initRes.status}）`);
+    }
+
+    const CHUNK_SIZE = 4 * 1024 * 1024;
+    let segmentIndex = 0;
+    for (let offset = 0; offset < totalBytes; offset += CHUNK_SIZE) {
+      const chunk = file.slice(offset, Math.min(offset + CHUNK_SIZE, totalBytes));
+      const appendData = new FormData();
+      appendData.append("command", "APPEND");
+      appendData.append("media_id", mediaId);
+      appendData.append("segment_index", String(segmentIndex));
+      appendData.append("media", chunk, fileName || (isVideo ? "video.mp4" : "image.jpg"));
+
+      const appendHeaders = await requestHeaders("/1.1/media/upload.json", "POST", true);
+      delete appendHeaders["content-type"];
+
+      const appendRes = await fetch(baseUrl, {
+        method: "POST",
+        headers: appendHeaders,
+        credentials: "include",
+      signal,
+        body: appendData
+      });
+      if (!appendRes.ok) {
+        throw new Error(`媒体数据上传失败（${appendRes.status}）`);
+      }
+      segmentIndex += 1;
+    }
+
+    const finalizeData = new FormData();
+    finalizeData.append("command", "FINALIZE");
+    finalizeData.append("media_id", mediaId);
+
+    const finalizeHeaders = await requestHeaders("/1.1/media/upload.json", "POST", true);
+    delete finalizeHeaders["content-type"];
+
+    const finalizeRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: finalizeHeaders,
+      credentials: "include",
+      signal,
+      body: finalizeData
+    });
+    const finalizeJson = await finalizeRes.json().catch(() => null);
+    if (!finalizeRes.ok || finalizeJson?.errors?.length) {
+      throw new Error(finalizeJson?.errors?.[0]?.message || `媒体处理完成失败（${finalizeRes.status}）`);
+    }
+
+    let processing = finalizeJson?.processing_info;
+    while (processing) {
+      signal?.throwIfAborted();
+      if (processing.state === "failed") throw new Error(processing.error?.message || "视频转码处理失败");
+      if (processing.state === "succeeded") break;
+      if (!["pending", "in_progress"].includes(processing.state)) throw new Error("媒体处理状态异常，请重试上传");
+      const seconds = Number(processing.check_after_secs);
+      const delay = Number.isFinite(seconds) ? Math.min(30000, Math.max(1000, seconds * 1000)) : 1000;
+      await new Promise((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); reject(signal.reason); };
+        const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+      signal?.throwIfAborted();
+      const statusHeaders = await requestHeaders("/1.1/media/upload.json", "GET", true);
+      delete statusHeaders["content-type"];
+      const statusRes = await fetch(`${baseUrl}?command=STATUS&media_id=${mediaId}`, {
+        method: "GET", headers: statusHeaders, credentials: "include", signal
+      });
+      const statusJson = await statusRes.json().catch(() => null);
+      if (!statusRes.ok || statusJson?.errors?.length) {
+        throw new Error(statusJson?.errors?.[0]?.message || `媒体状态查询失败（${statusRes.status}）`);
+      }
+      if (!statusJson?.processing_info) throw new Error("媒体状态查询未返回处理结果");
+      processing = statusJson.processing_info;
+    }
+    signal?.throwIfAborted();
+    return mediaId;
+  }
+
+  async function createReply(tweetId, text, mediaItems = [], deadline = Date.now() + 300000) {
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) throw new Error("上传已超时，未发送回复");
+    const signal = AbortSignal.timeout(Math.min(300000, deadline - Date.now()));
     const replyText = String(text || "").trim();
-    if (!replyText) throw new Error("回复内容不能为空");
-    return graphql("CreateTweet", {
+    const mediaEntities = [];
+    if (Array.isArray(mediaItems) && mediaItems.length > 0) {
+      for (const item of mediaItems) {
+        const blob = item.buffer ? new Blob([item.buffer], { type: item.type }) : item;
+        const mediaId = await uploadMedia(blob, item.name, item.type, signal);
+        if (mediaId) mediaEntities.push({ media_id: String(mediaId) });
+      }
+    }
+    if (!replyText && mediaEntities.length === 0) throw new Error("回复内容或配图不能为空");
+    signal.throwIfAborted();
+    if (Date.now() >= deadline) throw new Error("上传已超时，未发送回复");
+    try {
+      return await graphql("CreateTweet", {
       tweet_text: replyText,
       dark_request: false,
-      media: { media_entities: [], possibly_sensitive: false },
+      media: { media_entities: mediaEntities, possibly_sensitive: false },
       semantic_annotation_ids: [],
       disallowed_reply_options: null,
       reply: { in_reply_to_tweet_id: tweetId, exclude_reply_user_ids: [] }
-    });
+      }, "POST", signal);
+    } catch (error) {
+      if (error?.replyRejected) throw error;
+      // Once dispatched, a lost response cannot prove the write failed.
+      throw new Error("发布状态未确认，请先在 X 核对是否已发布，避免重复回复");
+    }
   }
 
   function followStateFromUser(user, userId) {
@@ -476,11 +646,13 @@
     if (!/^\d+$/.test(tweetId)) return respond(message.requestId, false, "帖子 ID 无效");
     try {
       let payload;
-      if (message.type === "READ_THREAD") payload = await readThread(tweetId, message.cursor);
+      if (message.type === "READ_BOOKMARK_FOLDERS") payload = await readBookmarkFolders(message.cursor);
+      else if (message.type === "SAVE_BOOKMARK_FOLDER") payload = await saveBookmarkToFolder(tweetId, message.folderId);
+      else if (message.type === "READ_THREAD") payload = await readThread(tweetId, message.cursor);
       else if (message.type === "READ_ARTICLE") payload = await readArticle(tweetId);
       else if (message.type === "TRANSLATE_TWEET") payload = await translateTweet(tweetId, message.targetLanguage);
       else if (message.type === "TOGGLE_ACTION") payload = await toggleAction(message.action, tweetId, Boolean(message.active));
-      else if (message.type === "CREATE_REPLY") payload = await createReply(tweetId, message.text);
+      else if (message.type === "CREATE_REPLY") payload = await createReply(tweetId, message.text, message.media, message.deadline);
       else throw new Error("未知请求");
       respond(message.requestId, true, payload);
     } catch (error) {
