@@ -24,7 +24,7 @@
     pinnedReplyIds: [],
     expandedReplyIds: new Set(),
     fetchedReplyIds: new Set(),
-    loadingSubrepliesFor: null,
+    subreplyPages: new Map(),
     scrollRepliesToTop: false,
     cursor: null,
     sort: "relevant",
@@ -32,6 +32,7 @@
     replyTarget: null,
     replyText: "",
     composerMedia: [],
+    replyUnconfirmed: false,
     composerExpanded: false,
     loading: false,
     loadingMore: false,
@@ -98,12 +99,30 @@
     }
   }
 
+  function hlsWorkerOptions() {
+    const workerPath = extensionUrl("vendor/hls/hls.worker.js");
+    return { enableWorker: Boolean(workerPath), workerPath: workerPath || undefined };
+  }
+
+  function dateLabel(value, compact = false) {
+    const node = element("time", "tuzai-author-date notranslate", `${compact ? " · " : ""}${formatDate(value, compact)}`);
+    node.setAttribute("translate", "no");
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime())) node.dateTime = date.toISOString();
+    return node;
+  }
+
   function requestPage(type, payload, timeoutMs = 18000) {
     const requestId = ++requestSequence;
+    const isReply = type === "CREATE_REPLY";
+    if (isReply) {
+      timeoutMs = 330000;
+      payload = { ...payload, deadline: Date.now() + 300000 };
+    }
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
         pendingRequests.delete(requestId);
-        reject(new Error("等待 X 响应超时，请稍后重试"));
+        reject(new Error(isReply ? "发布状态未确认，请先在 X 核对是否已发布，避免重复回复" : "等待 X 响应超时，请稍后重试"));
       }, timeoutMs);
       pendingRequests.set(requestId, { resolve, reject, timer });
       window.postMessage({ source: CONTENT_SOURCE, type, requestId, ...payload }, location.origin);
@@ -526,7 +545,7 @@
       pinnedReplyIds: [],
       expandedReplyIds: new Set(),
       fetchedReplyIds: new Set(),
-      loadingSubrepliesFor: null,
+      subreplyPages: new Map(),
       scrollRepliesToTop: false,
       cursor: null,
       sort: "relevant",
@@ -534,6 +553,7 @@
       replyTarget: null,
       replyText: "",
       composerMedia: [],
+      replyUnconfirmed: false,
       composerExpanded: false,
       loading: false,
       loadingMore: false,
@@ -922,7 +942,7 @@
     handle.target = "_blank";
     handle.rel = "noreferrer";
     secondary.append(handle);
-    if (compact) secondary.append(element("span", "tuzai-author-date", ` · ${formatDate(model.createdAt, true)}`));
+    if (compact) secondary.append(dateLabel(model.createdAt, true));
     identity.append(nameRow, secondary);
     wrap.append(avatarLink, identity);
     bindProfileHover(avatarLink, model.author, avatarLink.href);
@@ -1340,8 +1360,7 @@
         autoStartLoad: false,
         startLevel: -1,
         testBandwidth: true,
-        enableWorker: true,
-        workerPath: chrome.runtime.getURL("vendor/hls/hls.worker.js"),
+        ...hlsWorkerOptions(),
         capLevelToPlayerSize: true,
         capLevelOnFPSDrop: true,
         maxBufferLength: priority === "focal" ? 30 : 15,
@@ -1714,7 +1733,7 @@
       actionButton(model, "reply", "ph-chat-circle", "回复", model.counts.replies),
       actionButton(model, "repost", "ph-arrows-clockwise", model.flags.reposted ? "取消转发" : "转发", model.counts.reposts),
       actionButton(model, "like", "ph-heart", model.flags.liked ? "取消喜欢" : "喜欢", model.counts.likes),
-      actionButton(model, "bookmark", "ph-bookmark-simple", model.flags.bookmarked ? "移除书签" : "加入书签", model.counts.bookmarks),
+      actionButton(model, "bookmark", "ph-bookmark-simple", model.flags.bookmarked ? "管理收藏分类" : "收藏到 X 收藏夹", model.counts.bookmarks),
       actionButton(model, "share", "ph-upload-simple", "分享")
     );
     return bar;
@@ -1739,7 +1758,7 @@
     const quote = quoteCard(model);
     if (quote) article.append(quote);
     const meta = element("div", "tuzai-post-meta");
-    meta.append(element("span", "", formatDate(model.createdAt)));
+    meta.append(dateLabel(model.createdAt));
     if (model.counts.views) {
       meta.append(document.createTextNode(" · "), element("strong", "", formatCount(model.counts.views)), document.createTextNode(" 查看"));
     }
@@ -1810,7 +1829,40 @@
     return Number(reply.depth || 0) === 0;
   }
 
-  function renderReply(model, depth = 0) {
+  async function fetchSubreplies(model, depth) {
+    const pages = state.subreplyPages;
+    const page = pages.get(model.id) || { cursor: null, loaded: false, loading: false, error: false };
+    if (page.loading || (page.loaded && !page.cursor)) return;
+    pages.set(model.id, page);
+    const previousCursor = page.cursor;
+    page.loading = true;
+    page.error = false;
+    renderReader();
+    try {
+      const json = await requestPage("READ_THREAD", { tweetId: model.id, ...(previousCursor ? { cursor: previousCursor } : {}) });
+      // Closing or replacing the reader invalidates this branch's response.
+      if (state.subreplyPages !== pages) return;
+      const parsed = Core.parseTweetDetail(json, model.id);
+      const added = mergeReplies((parsed.replies || []).map((reply) => ({
+        ...reply,
+        inReplyToId: reply.inReplyToId || model.id,
+        depth: depth + 1 + (Number(reply.depth) || 0)
+      })));
+      page.cursor = Core.replyCursorAfterPage(previousCursor, parsed.cursor, added);
+      page.loaded = true;
+      state.fetchedReplyIds.add(model.id);
+    } catch (error) {
+      if (state.subreplyPages !== pages) return;
+      page.error = true;
+      notify("加载回复失败，请重试", "error");
+    } finally {
+      page.loading = false;
+      if (state.subreplyPages === pages) renderReader();
+    }
+  }
+
+  function renderReply(model, depth = 0, ancestors = new Set()) {
+    const path = new Set(ancestors).add(model.id);
     const isSubReply = depth > 0;
     const article = element("article", isSubReply ? "tuzai-reply-card tuzai-subreply-card" : "tuzai-reply-card");
     article.dataset.tweetId = model.id;
@@ -1828,11 +1880,12 @@
     if (quote) body.append(quote);
     body.append(actionBar(model, true));
 
-    const subReplies = state.replies.filter((reply) => reply.inReplyToId === model.id);
+    const subReplies = state.replies.filter((reply) => reply.inReplyToId === model.id && !path.has(reply.id));
     const subCount = Math.max(subReplies.length, Number(model.counts?.replies || 0));
-    if (subCount > 0 && depth < 6) {
+    if (subCount > 0) {
       const isExpanded = state.expandedReplyIds.has(model.id);
-      const isLoading = state.loadingSubrepliesFor === model.id;
+      const page = state.subreplyPages.get(model.id);
+      const isLoading = Boolean(page?.loading);
       const toggleRow = element("div", "tuzai-subreplies-toggle-row");
       const toggleBtn = element("button", "tuzai-subreplies-toggle-btn");
       toggleBtn.type = "button";
@@ -1856,27 +1909,8 @@
           renderReader();
         } else {
           state.expandedReplyIds.add(model.id);
-          const needsFetch = !state.fetchedReplyIds.has(model.id) && (subReplies.length < subCount || subCount > 0);
-          if (needsFetch) {
-            state.loadingSubrepliesFor = model.id;
-            renderReader();
-            try {
-              const json = await requestPage("READ_THREAD", { tweetId: model.id });
-              const parsed = Core.parseTweetDetail(json, model.id);
-              if (parsed?.replies?.length) {
-                mergeReplies(parsed.replies.map((r) => ({
-                  ...r,
-                  inReplyToId: r.inReplyToId || model.id,
-                  depth: depth + 1 + (Number(r.depth) || 0)
-                })));
-              }
-              state.fetchedReplyIds.add(model.id);
-            } catch (error) {
-              notify("加载回复失败", "error");
-            } finally {
-              state.loadingSubrepliesFor = null;
-              renderReader();
-            }
+          if (!state.subreplyPages.get(model.id)?.loaded && !state.subreplyPages.get(model.id)?.loading) {
+            await fetchSubreplies(model, depth);
           } else {
             renderReader();
           }
@@ -1888,14 +1922,25 @@
 
       if (isExpanded) {
         const subContainer = element("div", "tuzai-subreplies-container");
-        const currentSubs = state.replies.filter((reply) => reply.inReplyToId === model.id);
+        if (depth >= 2) subContainer.dataset.flat = "true";
+        const currentSubs = state.replies.filter((reply) => reply.inReplyToId === model.id && !path.has(reply.id));
         if (currentSubs.length > 0) {
           currentSubs.forEach((sub) => {
-            subContainer.append(renderReply(sub, depth + 1));
+            subContainer.append(renderReply(sub, depth + 1, path));
           });
-        } else if (!isLoading) {
+        } else if (!isLoading && !page?.error) {
           const emptyNotice = element("div", "tuzai-subreplies-empty", "暂无更多回复");
           subContainer.append(emptyNotice);
+        }
+        if (page?.cursor || page?.error || isLoading) {
+          const more = element("button", "tuzai-subreplies-more-btn", isLoading ? "正在加载回复…" : page?.error ? "重试加载回复" : "继续查看回复");
+          more.type = "button";
+          more.disabled = isLoading;
+          more.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            await fetchSubreplies(model, depth);
+          });
+          subContainer.append(more);
         }
         body.append(subContainer);
       }
@@ -2098,10 +2143,10 @@
     uploadBtn.append(icon("ph-image"));
     uploadBtn.addEventListener("click", () => fileInput.click());
 
-    const submit = element("button", "tuzai-reply-submit", state.busy.has("reply") ? "发布中…" : "回复");
+    const submit = element("button", "tuzai-reply-submit", state.replyUnconfirmed ? "请先在 X 核对" : state.busy.has("reply") ? "发布中…" : "回复");
     submit.type = "button";
     const hasContent = Boolean(state.replyText.trim()) || hasMedia;
-    submit.disabled = !hasContent || state.busy.has("reply");
+    submit.disabled = !hasContent || state.busy.has("reply") || state.replyUnconfirmed;
 
     const resizeTextarea = () => {
       textarea.style.height = "auto";
@@ -2120,13 +2165,13 @@
       state.composerExpanded = true;
       composer.dataset.expanded = "true";
       const hasPostable = Boolean(textarea.value.trim()) || (Array.isArray(state.composerMedia) && state.composerMedia.length > 0);
-      submit.disabled = !hasPostable || state.busy.has("reply");
+      submit.disabled = !hasPostable || state.busy.has("reply") || state.replyUnconfirmed;
       resizeTextarea();
     });
     textarea.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         const hasPostable = Boolean(textarea.value.trim()) || (Array.isArray(state.composerMedia) && state.composerMedia.length > 0);
-        if (hasPostable && !state.busy.has("reply")) publishReply();
+        if (hasPostable && !state.busy.has("reply") && !state.replyUnconfirmed) publishReply();
       }
     });
     submit.addEventListener("click", publishReply);
@@ -2155,9 +2200,11 @@
       if (files.length > 0) {
         event.preventDefault();
         const text = clipboardData.getData("text");
-        if (text && !state.replyText.trim()) {
-          state.replyText = text;
-          textarea.value = text;
+        if (text) {
+          const start = textarea.selectionStart ?? textarea.value.length;
+          const end = textarea.selectionEnd ?? start;
+          state.replyText = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+          textarea.value = state.replyText;
         }
         addMediaFiles(files);
       }
@@ -2249,6 +2296,23 @@
   }
 
   function renderReader() {
+    try {
+      renderReaderContent();
+    } catch (error) {
+      console.error("Peek render failed", error);
+      const root = document.getElementById(ROOT_ID);
+      if (!root) return;
+      const notice = element("div", "tuzai-state");
+      notice.append(element("strong", "", "内容暂时无法显示"), element("p", "", "请刷新当前 X 页面后重试；更新扩展后，已打开的页面需要重新加载。"));
+      const refresh = element("button", "", "刷新当前页面");
+      refresh.type = "button";
+      refresh.addEventListener("click", () => window.location.reload());
+      notice.append(refresh);
+      root.querySelector(".tuzai-post-body")?.replaceChildren(notice);
+    }
+  }
+
+  function renderReaderContent() {
     const root = document.getElementById(ROOT_ID);
     if (!root) return;
     const postBody = root.querySelector(".tuzai-post-body");
@@ -2405,7 +2469,120 @@
     }
   }
 
-  async function handleAction(model, action) {
+  function openBookmarkPicker(model) {
+    const root = document.getElementById(ROOT_ID);
+    if (!root || state.busy.has(`${model.id}:bookmark`)) return;
+    root.querySelector(".tuzai-bookmark-layer")?.remove();
+    const layer = element("div", "tuzai-bookmark-layer");
+    const panel = element("section", "tuzai-bookmark-picker");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", "保存到 X 收藏夹");
+    const heading = element("div", "tuzai-bookmark-heading");
+    heading.append(element("strong", "", "保存到 X 收藏夹"));
+    const close = element("button", "", "关闭");
+    close.type = "button";
+    const dismiss = () => { layer.remove(); root.querySelector(`[data-tweet-id="${model.id}"] .tuzai-action-bookmark`)?.focus(); };
+    close.addEventListener("click", dismiss);
+    heading.append(close);
+    const note = element("p", "tuzai-bookmark-note", "选择 X 原生收藏夹，或仅保存到所有书签。");
+    const all = element("button", "tuzai-bookmark-option", model.flags.bookmarked ? "已在所有书签中" : "仅保存到所有书签");
+    all.type = "button";
+    all.addEventListener("click", () => { dismiss(); if (!model.flags.bookmarked) handleAction(model, "bookmark", true); });
+    const list = element("div", "tuzai-bookmark-folders");
+    const status = element("p", "tuzai-bookmark-note", "正在读取 X 收藏夹…");
+    status.setAttribute("role", "status");
+    const more = element("button", "tuzai-bookmark-option", "加载更多收藏夹");
+    more.type = "button";
+    more.hidden = true;
+    const manage = element("a", "tuzai-bookmark-manage", "在 X 管理／新建收藏夹");
+    manage.href = "https://x.com/i/bookmarks";
+    manage.target = "_blank";
+    manage.rel = "noopener noreferrer";
+    panel.append(heading, note, all, list, status, more, manage);
+    if (model.flags.bookmarked) {
+      const remove = element("button", "tuzai-bookmark-remove", "取消收藏（从所有书签移除）");
+      remove.type = "button";
+      remove.addEventListener("click", () => { dismiss(); handleAction(model, "bookmark", true); });
+      panel.append(remove);
+    }
+    layer.append(panel);
+    layer.addEventListener("click", (event) => { event.stopPropagation(); if (event.target === layer) dismiss(); });
+    layer.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.stopPropagation(); dismiss(); }
+      if (event.key === "Tab") {
+        const focusable = [...panel.querySelectorAll("button:not(:disabled), a[href]")].filter((node) => !node.hidden);
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
+    root.append(layer);
+    close.focus();
+    const seen = new Set();
+    const cursors = new Set();
+    let cursor = "", loading = false, saving = false;
+    async function save(folder) {
+      if (saving) return;
+      saving = true;
+      const key = `${model.id}:bookmark`;
+      state.busy.add(key);
+      panel.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+      status.textContent = `正在保存到「${folder.name}」…`;
+      try {
+        const result = await requestPage("SAVE_BOOKMARK_FOLDER", { tweetId: model.id, folderId: folder.id });
+        if (!result?.saved) throw new Error("收藏结果未确认，请在 X 核对");
+        if (!root.isConnected) return;
+        const current = findModel(model.id) || model;
+        if (!current.flags.bookmarked) current.counts.bookmarks = (Number(current.counts.bookmarks) || 0) + 1;
+        current.flags.bookmarked = true;
+        dismiss();
+        renderReader();
+        notify(`已保存到 X 收藏夹「${folder.name}」`);
+      } catch (error) {
+        if (!layer.isConnected) return;
+        status.textContent = error instanceof Error ? error.message : "保存失败，请重试";
+        panel.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+      } finally {
+        state.busy.delete(key);
+        saving = false;
+      }
+    }
+    async function load() {
+      if (loading || saving) return;
+      loading = true;
+      more.disabled = true;
+      status.textContent = "正在读取 X 收藏夹…";
+      try {
+        const page = await requestPage("READ_BOOKMARK_FOLDERS", { tweetId: model.id, cursor });
+        if (!layer.isConnected) return;
+        let added = 0;
+        for (const folder of page.folders) {
+          if (seen.has(folder.id)) continue;
+          seen.add(folder.id); added++;
+          const button = element("button", "tuzai-bookmark-option", folder.name);
+          button.type = "button";
+          button.addEventListener("click", () => save(folder));
+          list.append(button);
+        }
+        if (cursor) cursors.add(cursor);
+        cursor = added && page.cursor && !cursors.has(page.cursor) ? page.cursor : "";
+        more.hidden = !cursor;
+        more.textContent = "加载更多收藏夹";
+        status.textContent = seen.size ? "分类直接同步到 X，收藏仍会出现在所有书签中。" : "还没有收藏夹，可在 X 中新建后重新打开这里。";
+      } catch (error) {
+        if (!layer.isConnected) return;
+        status.textContent = "暂时无法读取收藏夹。X 原生收藏夹需要相应会员权限，也可先打开 X 收藏页后重试。";
+        more.textContent = "重新读取收藏夹";
+        more.hidden = false;
+      } finally { loading = false; more.disabled = false; }
+    }
+    more.addEventListener("click", load);
+    load();
+  }
+
+  async function handleAction(model, action, directBookmark = false) {
+    if (action === "bookmark" && !directBookmark) return openBookmarkPicker(model);
     if (action === "reply") {
       state.replyTarget = model;
       state.composerExpanded = true;
@@ -2444,7 +2621,7 @@
     const text = state.replyText.trim();
     const media = Array.isArray(state.composerMedia) ? [...state.composerMedia] : [];
     const target = state.replyTarget || state.focal;
-    if ((!text && media.length === 0) || !target || state.busy.has("reply")) return;
+    if ((!text && media.length === 0) || !target || state.busy.has("reply") || state.replyUnconfirmed) return;
     state.busy.add("reply");
     renderReader();
     try {
@@ -2462,6 +2639,7 @@
       }
       const json = await requestPage("CREATE_REPLY", { tweetId: target.id, text, media: serializedMedia });
       const created = Core.collectTweetModels(json).find((model) => model.id !== state.focal?.id);
+      if (!created) throw new Error("发布状态未确认，请先在 X 核对是否已发布，避免重复回复");
       if (created && (target.id === state.focal.id || state.replies.some((reply) => reply.id === target.id))) {
         created.depth = target.id === state.focal.id ? 0 : Math.min((target.depth || 0) + 1, 3);
         mergeReplies([created]);
@@ -2481,7 +2659,8 @@
       state.composerExpanded = false;
       notify("回复已发布到 X");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "回复发布失败", "error");
+      if (String(error?.message || "").startsWith("发布状态未确认")) state.replyUnconfirmed = true;
+      notify(error instanceof Error ? error.message : "回复发布失败", state.replyUnconfirmed ? "info" : "error");
     } finally {
       state.busy.delete("reply");
       renderReader();

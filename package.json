@@ -18,7 +18,7 @@
     "build:preview": "vite build && node scripts/prepare-sites-build.mjs",
     "build:extension": "node scripts/build-extension.mjs",
     "preview": "vite preview",
-    "test": "npm run build:preview && npm run build:extension && node --test tests/extension-core.test.mjs tests/follow.test.mjs tests/sites-worker.test.mjs",
+    "test": "npm run build:preview && npm run build:extension && node --test tests/extension-core.test.mjs tests/follow.test.mjs tests/sites-worker.test.mjs tests/acceptance-mentions.test.mjs tests/acceptance-subreplies.test.mjs tests/acceptance-polls.test.mjs tests/acceptance-media.test.mjs tests/acceptance-reload.test.mjs tests/bookmark-folders.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {

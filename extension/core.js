@@ -183,47 +183,22 @@
     if (!text || typeof text !== "string") return { text: "", entities: [] };
     const currentEntities = entities || [];
 
-    let prefixLength = 0;
-    const displayTextRange = options?.displayTextRange;
-    const replyToHandle = options?.replyToHandle;
-
-    // 1. If X provides display_text_range where start > 0,
-    // Twitter officially sets display_text_range[0] to the start of the user-entered text,
-    // placing auto-injected recipient @mentions in text.slice(0, start).
-    if (Array.isArray(displayTextRange) && Number.isInteger(displayTextRange[0]) && displayTextRange[0] > 0) {
-      const candidateStart = displayTextRange[0];
-      if (candidateStart < text.length) {
-        const candidatePrefix = text.slice(0, candidateStart);
-        if (/^(@[A-Za-z0-9_]+\s*)+$/.test(candidatePrefix)) {
-          prefixLength = candidateStart;
-        }
-      }
+    // Only hide recipients explicitly outside X's visible text range.
+    // Reply targets alone cannot distinguish automatic and intentional mentions.
+    const range = options?.displayTextRange;
+    if (!Array.isArray(range) || range.length !== 2 ||
+        !Number.isInteger(range[0]) || !Number.isInteger(range[1]) ||
+        range[0] <= 0 || range[1] < range[0] || range[1] > text.length) {
+      return { text, entities: currentEntities };
     }
-
-    // 2. If display_text_range was not present/usable, but we know the handle of the user being replied to,
-    // strip ONLY that specific reply-to handle from the beginning of the text.
-    if (!prefixLength && replyToHandle && typeof replyToHandle === "string") {
-      const escaped = replyToHandle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const matchTarget = text.match(new RegExp(`^@${escaped}\\b\\s*`, "i"));
-      if (matchTarget) {
-        prefixLength = matchTarget[0].length;
-      }
+    const prefixLength = range[0];
+    const prefix = text.slice(0, prefixLength);
+    // Require complete mentions and whitespace; never cut through a handle.
+    if (!/^(@[A-Za-z0-9_]+\s+)+$/.test(prefix)) {
+      return { text, entities: currentEntities };
     }
-
-    // 3. Fallback: if neither display_text_range nor replyToHandle was specified,
-    // strip ONLY the FIRST @mention (the reply recipient), never stripping subsequent mentions (like @Grok).
-    if (!prefixLength && !replyToHandle && !displayTextRange) {
-      const matchFirst = text.match(/^@[A-Za-z0-9_]+\s*/);
-      if (matchFirst) {
-        prefixLength = matchFirst[0].length;
-      }
-    }
-
-    if (!prefixLength) return { text, entities: currentEntities };
-
-    // Consume any trailing whitespace immediately following the stripped prefix
-    while (prefixLength < text.length && /\s/.test(text[prefixLength])) {
-      prefixLength++;
+    if (currentEntities.some(e => e.start < prefixLength && e.end > prefixLength)) {
+      return { text, entities: currentEntities };
     }
 
     const remainingText = text.slice(prefixLength);

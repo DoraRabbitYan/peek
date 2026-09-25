@@ -552,8 +552,8 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(content, /const hlsJsSupported = Boolean\(media\.hlsUrl && HlsPlayer\?\.isSupported\?\.\(\)\)/);
   assert.match(content, /&& !hlsJsSupported/);
   assert.ok(content.indexOf("const hlsJsSupported") < content.indexOf("const nativeHls"));
-  assert.match(content, /enableWorker: true/);
-  assert.match(content, /workerPath: chrome\.runtime\.getURL\("vendor\/hls\/hls\.worker\.js"\)/);
+  assert.match(content, /enableWorker: Boolean\(workerPath\)/);
+  assert.match(content, /extensionUrl\("vendor\/hls\/hls\.worker\.js"\)/);
   assert.match(content, /abrEwmaDefaultEstimateMax: 12000000/);
   assert.match(content, /snapshotArticle/);
   assert.match(content, /findClickedQuoteScope/);
@@ -644,7 +644,7 @@ test("reader uses the page data bridge without frames, hidden tabs or cloned X D
   assert.match(content, /composerMedia/);
   assert.match(content, /addMediaFiles/);
   assert.match(bridge, /uploadMedia/);
-  assert.match(bridge, /CREATE_REPLY[\s\S]*createReply\(tweetId,\s*message\.text,\s*message\.media\)/);
+  assert.match(bridge, /CREATE_REPLY[\s\S]*createReply\(tweetId,\s*message\.text,\s*message\.media,\s*message\.deadline\)/);
   assert.match(styles, /\.tuzai-composer-media-grid/);
   assert.match(styles, /\.tuzai-composer-upload-btn/);
   assert.match(styles, /\.tuzai-composer-media-remove/);
@@ -735,11 +735,12 @@ test("tweetModel handles special characters, unicode math fonts, emojis and html
 });
 
 test("stripLeadingMentions removes leading reply mentions and updates entity offsets", () => {
-  const result = Core.stripLeadingMentions("@Dora_Rabbit_ 已经用上了，必须支持。");
+  const input = "@Dora_Rabbit_ 已经用上了，必须支持。";
+  const result = Core.stripLeadingMentions(input, [], { displayTextRange: [14, input.length] });
   assert.equal(result.text, "已经用上了，必须支持。");
 
   // If Twitter display_text_range includes multiple auto-injected thread recipients, strip them
-  const threadResult = Core.stripLeadingMentions("@user1 @user2 Hello world!", [], { displayTextRange: [14, 26] });
+  const threadResult = Core.stripLeadingMentions("@user1 @user2 Hello world!", [], { displayTextRange: [14, "@user1 @user2 Hello world!".length] });
   assert.equal(threadResult.text, "Hello world!");
 
   // If user actively types @grok in a reply, only the reply target is stripped, @grok is preserved
@@ -753,19 +754,19 @@ test("stripLeadingMentions removes leading reply mentions and updates entity off
   assert.equal(activeMentionResult.entities[0].start, 0);
   assert.equal(activeMentionResult.entities[0].end, 5);
 
-  // Fallback without range: replyToHandle preserves active mentions
+  // A reply target alone does not prove a mention is outside visible text.
   const handleFallback = Core.stripLeadingMentions("@jefflijun @grok 为什么这么说", [], { replyToHandle: "jefflijun" });
-  assert.equal(handleFallback.text, "@grok 为什么这么说");
+  assert.equal(handleFallback.text, "@jefflijun @grok 为什么这么说");
 
-  // Fallback with no options: only strips first mention, preserves active second mention
+  // Missing metadata preserves the full original text.
   const noOptionFallback = Core.stripLeadingMentions("@user1 @user2 Hello world!");
-  assert.equal(noOptionFallback.text, "@user2 Hello world!");
+  assert.equal(noOptionFallback.text, "@user1 @user2 Hello world!");
 
   const withEntities = Core.stripLeadingMentions("@Dora_Rabbit_ check https://t.co/abc #test", [
     { start: 0, end: 13, kind: "mention", label: "@Dora_Rabbit_", url: "https://x.com/Dora_Rabbit_" },
     { start: 20, end: 36, kind: "url", label: "https://t.co/abc", url: "https://t.co/abc" },
     { start: 37, end: 42, kind: "hashtag", label: "#test", url: "https://x.com/hashtag/test" }
-  ]);
+  ], { displayTextRange: [14, 42] });
   assert.equal(withEntities.text, "check https://t.co/abc #test");
   assert.equal(withEntities.entities.length, 2);
   assert.equal(withEntities.entities[0].start, 6);
@@ -788,7 +789,7 @@ test("tweetModel cleans leading mentions when tweet is a reply and preserves act
       full_text: "@dashaloveu 好的！最近在迭代计划中咯",
       in_reply_to_status_id_str: "2102624917732958332",
       in_reply_to_screen_name: "dashaloveu",
-      display_text_range: [11, 25],
+      display_text_range: [12, 24],
       entities: { urls: [], user_mentions: [{ indices: [0, 10], screen_name: "dashaloveu" }], hashtags: [] }
     },
     core: { user_results: { result: { rest_id: "1", legacy: { screen_name: "Dora_Rabbit_", name: "兔崽 Dora" } } } }
@@ -804,7 +805,7 @@ test("tweetModel cleans leading mentions when tweet is a reply and preserves act
       full_text: "@jefflijun @grok 为什么这么说，和银行有什么关系",
       in_reply_to_status_id_str: "100",
       in_reply_to_screen_name: "jefflijun",
-      display_text_range: [11, 35],
+      display_text_range: [11, 32],
       entities: {
         urls: [],
         user_mentions: [

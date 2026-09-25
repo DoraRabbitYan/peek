@@ -1177,3 +1177,22 @@
 @media (prefers-reduced-motion: reduce) {
   .tuzai-spinner { animation-duration: 1.8s; }
 }
+
+/* Keep deeper branches readable without hiding their expansion controls. */
+.tuzai-reply-card .tuzai-subreplies-container[data-flat="true"] {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.tuzai-bookmark-layer { position: absolute; inset: 0; z-index: 20; background: #0006; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.tuzai-bookmark-picker { width: min(380px, 100%); max-height: 80vh; overflow-y: auto; background: var(--tuzai-bg, #fff); color: var(--tuzai-fg); border: 1px solid var(--tuzai-border); border-radius: 18px; padding: 20px; box-shadow: 0 12px 48px #0003; }
+.tuzai-bookmark-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:18px; }
+.tuzai-bookmark-picker button { cursor:pointer; font:inherit; color:inherit; background:transparent; border:1px solid var(--tuzai-border); border-radius:10px; padding:10px 12px; }
+.tuzai-bookmark-picker button:disabled { opacity:.5; cursor:wait; }
+.tuzai-bookmark-option { display:block; width:100%; text-align:left; margin:8px 0; overflow-wrap:anywhere; }
+.tuzai-bookmark-option[hidden] { display:none; }
+.tuzai-bookmark-option:hover { background:var(--tuzai-hover, #8882); }
+.tuzai-bookmark-note { color:var(--tuzai-muted); font-size:13px; line-height:1.5; margin:12px 0; }
+.tuzai-bookmark-manage { display:block; color:var(--tuzai-accent); font-size:14px; margin:12px 0; }
+.tuzai-bookmark-remove { width:100%; }
